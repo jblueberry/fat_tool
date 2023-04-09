@@ -7,7 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "fat_manager.hpp"
+#include "fat_manager.h"
 
 #include <iostream>
 
@@ -44,14 +44,16 @@ int main(int argc, char *argv[]) {
     auto file_path = std::string(diskimg);
     FATManager mgr{file_path};
 
-    printf("%s", mgr.info().c_str());
+    auto command = std::string(argv[2]);
 
-    mgr.ls();
-
-    // for (auto i = 0; i < 2000; ++i) {
-    //     auto entry_value = mgr.clusterNumberToFATEntryValue(i);
-    //     std::cout << i << " " << std::hex << entry_value << std::endl;
-    // }
+    if (command == "ck") {
+        mgr.ck();
+    } else if (command == "ls") {
+        mgr.ls();
+    } else {
+        std::cerr << "Unknown command: " << command << std::endl;
+        exit(1);
+    }
 
     /*
      * Print the contents of the first cluster.

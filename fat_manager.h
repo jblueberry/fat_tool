@@ -4,7 +4,7 @@
 #include "fat_cluster.hpp"
 #include <cassert>
 #include <cstdint>
-#include <iostream>
+#include <fcntl.h>
 #include <memory>
 #include <string>
 #include <sys/mman.h>
@@ -14,6 +14,13 @@
 #define REM(x, y)       ((x) % (y))
 
 namespace cs5250 {
+
+static char unicodeToAscii(uint16_t unicode) {
+    if (unicode >= 0x20 && unicode <= 0x7e) {
+        return static_cast<char>(unicode);
+    }
+    return '?';
+}
 
 template <typename T, typename... Args>
 bool isOneOf(const T &input, Args... args) {
@@ -27,6 +34,11 @@ template <size_t N> bool allZero(const uint8_t (&arr)[N]) {
         }
     }
     return true;
+}
+
+template <typename E>
+constexpr auto to_integral(E e) -> typename std::underlying_type<E>::type {
+    return static_cast<typename std::underlying_type<E>::type>(e);
 }
 
 template <typename T>
@@ -56,6 +68,19 @@ class FATManager {
     } __attribute__((packed));
 
     struct FATDirectory {
+
+        enum class Attr : uint8_t {
+            ReadOnly = 0x01,
+            Hidden = 0x02,
+            System = 0x04,
+            VolumeID = 0x08,
+            Directory = 0x10,
+            Archive = 0x20,
+            LongName = ReadOnly | Hidden | System | VolumeID,
+            LongNameMask =
+                ReadOnly | Hidden | System | VolumeID | Directory | Archive,
+        };
+
         FileName DIR_Name;
         uint8_t DIR_Attr;
         uint8_t DIR_NTRes;
@@ -68,9 +93,69 @@ class FATManager {
         uint16_t DIR_WrtDate;
         uint16_t DIR_FstClusLO;
         uint32_t DIR_FileSize;
+
+      public:
+        static const std::string attributeTypeToString(Attr attr) {
+            switch (attr) {
+            case Attr::ReadOnly:
+                return "Read Only";
+            case Attr::Hidden:
+                return "Hidden";
+            case Attr::System:
+                return "System";
+            case Attr::VolumeID:
+                return "Volume ID";
+            case Attr::Directory:
+                return "Directory";
+            case Attr::Archive:
+                return "Archive";
+            case Attr::LongName:
+                return "Long Name";
+            default:
+                return "Unknown";
+            }
+        }
     } __attribute__((packed));
 
+    static_assert(sizeof(FATDirectory) == 32);
+
     static_assert(sizeof(FSInfo) == 512);
+
+    struct LongNameDirectory {
+
+        struct UnicodeChar {
+            uint8_t low;
+            uint8_t high;
+        } __attribute__((packed));
+
+        template <size_t N> struct Name {
+            UnicodeChar values[N];
+        } __attribute__((packed));
+
+        template <size_t N>
+        static const std::pair<std::string, bool> getName(const Name<N> &name) {
+            std::string str = "";
+            for (int i = 0; i < N; ++i) {
+                if (name.values[i].low == 0)
+                    return {str, true};
+                str += unicodeToAscii(
+                    reinterpret_cast<const uint16_t &>(name.values[i]));
+            }
+            return {str, false};
+        }
+
+        uint8_t LDIR_Ord;
+        Name<5> LDIR_Name1;
+        uint8_t LDIR_Attr;
+        uint8_t LDIR_Type;
+        uint8_t LDIR_Chksum;
+        Name<6> LDIR_Name2;
+        uint16_t LDIR_FstClusLO;
+        Name<2> LDIR_Name3;
+
+    } __attribute__((packed));
+
+    static_assert(sizeof(LongNameDirectory) == 32);
 
   protected:
     enum class FATType { FAT12, FAT16, FAT32 };
@@ -119,7 +204,12 @@ class FATManager {
         }
     }
 
-    const std::string info() const {
+    void ls();
+
+    void ck();
+
+  private:
+    inline const std::string info() const {
         std::string ret;
         ret += "FAT type: ";
         switch (fat_type) {
@@ -142,42 +232,10 @@ class FATManager {
         ret += "FATs sectors: " + std::to_string(fat_sector_count) + "\n";
         ret +=
             "Root dir sectors: " + std::to_string(root_dir_sector_count) + "\n";
-        ret += "Data sectors: " + std::to_string(data_sector_count) + "\n";
+        ret += "Data sectors: " + std::to_string(data_sector_count);
         return std::move(ret);
     }
-
-    void ls() {
-        ASSERT(fat_type == FATType::FAT32);
-        // list all the files in the root directory
-        auto root_dir = this->root_cluster;
-
-        while (true) {
-            auto fat_entry = clusterNumberToFATEntryValue(root_dir);
-            auto end = endOfFile(fat_entry);
-            auto first_sector_number =
-                dataClusterNumberToFirstSectorNumber(root_dir);
-            auto dirs_per_sector = bytes_per_sector / sizeof(FATDirectory);
-
-            for (auto i = 0; i < sectors_per_cluster; ++i) {
-                auto sector = first_sector_number + i;
-                auto sector_start = getSectorStart(sector);
-
-                for (auto j = 0; j < dirs_per_sector; ++j) {
-                    auto dir = reinterpret_cast<const FATDirectory *>(
-                        sector_start + j * sizeof(FATDirectory));
-                    std::string main_name(dir->DIR_Name.name, 8);
-                    std::string ext(dir->DIR_Name.ext, 3);
-                    std::cout << main_name << "." << ext << std::endl;
-                }
-            }
-
-            if (end) {
-                break;
-            }
-        }
-    }
-
-  private:
+    inline void parseDir(const FATDirectory &dir_entry) {}
     inline uint32_t
     clusterNumberToFATEntryValue(uint32_t cluster_number) const {
         ASSERT(this->fat_type == FATType::FAT32);
