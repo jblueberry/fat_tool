@@ -1,12 +1,35 @@
-#ifndef FAT_H
-#define FAT_H
-
+#pragma once
 #include <stdint.h>
 
-/*
- * Boot Sector and BPB
- * RTFM: Section 3.1 - 3.3
- */
+namespace cs5250 {
+
+struct Extended16 {
+    uint8_t BS_DrvNum;        /* offset 36 */
+    uint8_t BS_Reserved1;     /* offset 37 */
+    uint8_t BS_BootSig;       /* offset 38 */
+    uint8_t BS_VolID[4];      /* offset 39 */
+    uint8_t BS_VolLab[11];    /* offset 43 */
+    char BS_FilSysType[8]; /* offset 54 */
+    uint8_t _[448];
+} __attribute__((packed));
+
+struct Extended32 {
+    uint32_t BPB_FATSz32;     /* offset 36 */
+    uint16_t BPB_ExtFlags;    /* offset 40 */
+    uint8_t BPB_FSVer[2];     /* offset 42 */
+    uint32_t BPB_RootClus;    /* offset 44 */
+    uint16_t BPB_FSInfo;      /* offset 48 */
+    uint16_t BPB_BkBootSec;   /* offset 50 */
+    uint8_t BPB_Reserved[12]; /* offset 52 */
+    uint8_t BS_DrvNum;        /* offset 64 */
+    uint8_t BS_Reserved1;     /* offset 65 */
+    uint8_t BS_BootSig;       /* offset 66 */
+    uint8_t BS_VolID[4];      /* offset 67 */
+    uint8_t BS_VolLab[11];    /* offset 71 */
+    uint8_t BS_FilSysType[8]; /* offset 82 */
+    uint8_t _[420];
+} __attribute__((packed));
+
 struct BPB {
     uint8_t BS_jmpBoot[3];   /* offset 0 */
     uint8_t BS_OEMName[8];   /* offset 3 */
@@ -24,35 +47,14 @@ struct BPB {
     uint32_t BPB_TotSec32;   /* offset 32 */
     union {
         // Extended BPB structure for FAT12 and FAT16 volumes
-        struct {
-            uint8_t BS_DrvNum;        /* offset 36 */
-            uint8_t BS_Reserved1;     /* offset 37 */
-            uint8_t BS_BootSig;       /* offset 38 */
-            uint8_t BS_VolID[4];      /* offset 39 */
-            uint8_t BS_VolLab[11];    /* offset 43 */
-            uint8_t BS_FilSysType[8]; /* offset 54 */
-            uint8_t _[448];
-        } __attribute__((packed)) fat16;
+        Extended16 fat16;
         // Extended BPB structure for FAT32 volumes
-        struct {
-            uint32_t BPB_FATSz32;     /* offset 36 */
-            uint16_t BPB_ExtFlags;    /* offset 40 */
-            uint8_t BPB_FSVer[2];     /* offset 42 */
-            uint32_t BPB_RootClus;    /* offset 44 */
-            uint16_t BPB_FSInfo;      /* offset 48 */
-            uint16_t BPB_BkBootSec;   /* offset 50 */
-            uint8_t BPB_Reserved[12]; /* offset 52 */
-            uint8_t BS_DrvNum;        /* offset 64 */
-            uint8_t BS_Reserved1;     /* offset 65 */
-            uint8_t BS_BootSig;       /* offset 66 */
-            uint8_t BS_VolID[4];      /* offset 67 */
-            uint8_t BS_VolLab[11];    /* offset 71 */
-            uint8_t BS_FilSysType[8]; /* offset 82 */
-            uint8_t _[420];
-        } __attribute__((packed)) fat32;
+        Extended32 fat32;
     };
     uint16_t Signature_word; /* offset 510 */
 } __attribute__((packed));
+
+static_assert(sizeof(BPB) == 512, "BPB size is not 512 bytes");
 
 /*
  * File System Information (FSInfo) Structure
@@ -110,4 +112,4 @@ union DirEntry {
     } __attribute__((packed)) ldir;
 };
 
-#endif
+} // namespace cs5250
