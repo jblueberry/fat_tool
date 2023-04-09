@@ -1,8 +1,13 @@
+#pragma once
+
 #include "fat.h"
+#include "fat_cluster.hpp"
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <sys/mman.h>
 
 #define ASSERT(x)       assert(x)
 #define ASSERT_EQ(x, y) assert((x) == (y))
@@ -33,6 +38,7 @@ class FATManager {
     const uint8_t *image = nullptr;
     off_t image_size = 0;
     uint32_t root_cluster = 0;
+    std::unique_ptr<FATMap> fat_map;
 
     struct FSInfo {
         uint32_t lead_sig;
@@ -131,9 +137,11 @@ class FATManager {
         ret += "Bytes per sector: " + std::to_string(bytes_per_sector) + "\n";
         ret += "Sectors per cluster: " + std::to_string(sectors_per_cluster) +
                "\n";
-        ret += "Reserved sectors: " + std::to_string(reserved_sector_count) + "\n";
+        ret +=
+            "Reserved sectors: " + std::to_string(reserved_sector_count) + "\n";
         ret += "FATs sectors: " + std::to_string(fat_sector_count) + "\n";
-        ret += "Root dir sectors: " + std::to_string(root_dir_sector_count) + "\n";
+        ret +=
+            "Root dir sectors: " + std::to_string(root_dir_sector_count) + "\n";
         ret += "Data sectors: " + std::to_string(data_sector_count) + "\n";
         return std::move(ret);
     }
@@ -146,15 +154,17 @@ class FATManager {
         while (true) {
             auto fat_entry = clusterNumberToFATEntryValue(root_dir);
             auto end = endOfFile(fat_entry);
-            auto first_sector_number = dataClusterNumberToFirstSectorNumber(root_dir);
+            auto first_sector_number =
+                dataClusterNumberToFirstSectorNumber(root_dir);
             auto dirs_per_sector = bytes_per_sector / sizeof(FATDirectory);
 
-            for(auto i = 0; i < sectors_per_cluster; ++i) {
+            for (auto i = 0; i < sectors_per_cluster; ++i) {
                 auto sector = first_sector_number + i;
                 auto sector_start = getSectorStart(sector);
 
-                for(auto j = 0; j < dirs_per_sector; ++j) {
-                    auto dir = reinterpret_cast<const FATDirectory *>(sector_start + j * sizeof(FATDirectory));
+                for (auto j = 0; j < dirs_per_sector; ++j) {
+                    auto dir = reinterpret_cast<const FATDirectory *>(
+                        sector_start + j * sizeof(FATDirectory));
                     std::string main_name(dir->DIR_Name.name, 8);
                     std::string ext(dir->DIR_Name.ext, 3);
                     std::cout << main_name << "." << ext << std::endl;
@@ -218,8 +228,9 @@ class FATManager {
             total_sector_count = bpb.BPB_TotSec32;
 
         auto data_sector_count =
-            total_sector_count - (bpb.BPB_RsvdSecCnt + (bpb.BPB_NumFATs * fat_size) +
-                             root_dir_sector_count);
+            total_sector_count -
+            (bpb.BPB_RsvdSecCnt + (bpb.BPB_NumFATs * fat_size) +
+             root_dir_sector_count);
 
         auto count_of_clusters = data_sector_count / bpb.BPB_SecPerClus;
 
@@ -242,13 +253,22 @@ class FATManager {
         this->root_dir_sector_count = root_dir_sector_count;
         this->data_sector_count = data_sector_count;
         this->number_of_fats = bpb.BPB_NumFATs;
+
+        auto fat_start_address = reinterpret_cast<uint32_t *>(
+            reinterpret_cast<uint64_t>(image) +
+            (bpb.BPB_RsvdSecCnt * bytes_per_sector));
+
+        this->fat_map = std::make_unique<FATMap>(this->fat_size * 512 / 4,
+                                                 fat_start_address);
     }
 
-    inline uint32_t dataClusterNumberToFirstSectorNumber(uint32_t cluster_number) {
+    inline uint32_t
+    dataClusterNumberToFirstSectorNumber(uint32_t cluster_number) {
         ASSERT(cluster_number >= 2);
         ASSERT(cluster_number <= maximumValidClusterNumber());
 
-        auto first_data_sector = reserved_sector_count + (number_of_fats * fat_size);
+        auto first_data_sector =
+            reserved_sector_count + (number_of_fats * fat_size);
 
         return (cluster_number - 2) * sectors_per_cluster + first_data_sector;
     }
