@@ -72,7 +72,8 @@ void FATManager::ls() {
                 auto sector_start = getSectorStart(sector);
                 auto sector_end = sector_start + bytes_per_sector;
 
-                for (auto j = 0; j < dirs_per_sector; ++j) {
+                for (decltype(dirs_per_sector) j = 0; j < dirs_per_sector;
+                     ++j) {
                     auto dir = reinterpret_cast<const FATDirectory *>(
                         sector_start + j * sizeof(FATDirectory));
 

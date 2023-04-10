@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fat.h"
-#include "fat_cluster.hpp"
+#include "fat_cluster.h"
 #include <cassert>
 #include <cstdint>
 #include <fcntl.h>
@@ -233,7 +233,7 @@ class FATManager {
         ret +=
             "Root dir sectors: " + std::to_string(root_dir_sector_count) + "\n";
         ret += "Data sectors: " + std::to_string(data_sector_count);
-        return std::move(ret);
+        return ret;
     }
     inline void parseDir(const FATDirectory &dir_entry) {}
     inline uint32_t

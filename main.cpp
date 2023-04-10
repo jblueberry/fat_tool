@@ -6,9 +6,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
-
 #include "fat_manager.h"
-
 #include <iostream>
 
 /*
@@ -20,17 +18,17 @@
  * must remove this function. If you include this function in your submission,
  * you may face a penalty.
  */
-void hexdump(const void *data, size_t size) {
-#warning "You must remove this function before submitting."
-    FILE *proc;
+// void hexdump(const void *data, size_t size) {
+// #warning "You must remove this function before submitting."
+//     FILE *proc;
 
-    proc = popen("hexdump -C", "w");
-    if (proc == NULL) {
-        perror("popen");
-        exit(1);
-    }
-    fwrite(data, 1, size, proc);
-}
+//     proc = popen("hexdump -C", "w");
+//     if (proc == NULL) {
+//         perror("popen");
+//         exit(1);
+//     }
+//     fwrite(data, 1, size, proc);
+// }
 
 int main(int argc, char *argv[]) {
     setbuf(stdout, NULL);
