@@ -1,14 +1,22 @@
 #pragma once
 #include <stdint.h>
+#include <string>
 
 namespace cs5250 {
 
+static char unicodeToAscii(uint16_t unicode) {
+    if (unicode >= 0x20 && unicode <= 0x7e) {
+        return static_cast<char>(unicode);
+    }
+    return '?';
+}
+
 struct Extended16 {
-    uint8_t BS_DrvNum;        /* offset 36 */
-    uint8_t BS_Reserved1;     /* offset 37 */
-    uint8_t BS_BootSig;       /* offset 38 */
-    uint8_t BS_VolID[4];      /* offset 39 */
-    uint8_t BS_VolLab[11];    /* offset 43 */
+    uint8_t BS_DrvNum;     /* offset 36 */
+    uint8_t BS_Reserved1;  /* offset 37 */
+    uint8_t BS_BootSig;    /* offset 38 */
+    uint8_t BS_VolID[4];   /* offset 39 */
+    uint8_t BS_VolLab[11]; /* offset 43 */
     char BS_FilSysType[8]; /* offset 54 */
     uint8_t _[448];
 } __attribute__((packed));
@@ -70,46 +78,121 @@ struct FSInfo {
     uint32_t FSI_TrailSig;      /* offset 508 */
 } __attribute__((packed));
 
-/*
- * Directory Structure
- * RTFM: Section 6
- */
-#define ATTR_READ_ONLY 0x01
-#define ATTR_HIDDEN    0x02
-#define ATTR_SYSTEM    0x04
-#define ATTR_VOLUME_ID 0x08
-#define ATTR_DIRECTORY 0x10
-#define ATTR_ARCHIVE   0x20
-#define ATTR_LONG_NAME                                                         \
-    ATTR_READ_ONLY | ATTR_HIDDEN | ATTR_SYSTEM | ATTR_VOLUME_ID
+struct FileName {
+    char name[8];
+    char ext[3];
+} __attribute__((packed));
 
-union DirEntry {
-    // Directory Structure (RTFM: Section 6)
-    struct {
-        uint8_t DIR_Name[11];     /* offset 0 */
-        uint8_t DIR_Attr;         /* offset 11 */
-        uint8_t DIR_NTRes;        /* offset 12 */
-        uint8_t DIR_CrtTimeTenth; /* offset 13 */
-        uint16_t DIR_CrtTime;     /* offset 14 */
-        uint16_t DIR_CrtDate;     /* offset 16 */
-        uint16_t DIR_LstAccDate;  /* offset 18 */
-        uint16_t DIR_FstClusHI;   /* offset 20 */
-        uint16_t DIR_WrtTime;     /* offset 22 */
-        uint16_t DIR_WrtDate;     /* offset 24 */
-        uint16_t DIR_FstClusLO;   /* offset 26 */
-        uint32_t DIR_FileSize;    /* offset 28 */
-    } __attribute__((packed)) dir;
-    // Long File Name Implementation (RTFM: Section 7)
-    struct {
-        uint8_t LDIR_Ord;        /* offset 0 */
-        uint8_t LDIR_Name1[10];  /* offset 1 */
-        uint8_t LDIR_Attr;       /* offset 11 */
-        uint8_t LDIR_Type;       /* offset 12 */
-        uint8_t LDIR_Chksum;     /* offset 13 */
-        uint8_t LDIR_Name2[12];  /* offset 14 */
-        uint16_t LDIR_FstClusLO; /* offset 26 */
-        uint8_t LDIR_Name3[4];   /* offset 28 */
-    } __attribute__((packed)) ldir;
+struct FATDirectory {
+
+    enum class Attr : uint8_t {
+        ReadOnly = 0x01,
+        Hidden = 0x02,
+        System = 0x04,
+        VolumeID = 0x08,
+        Directory = 0x10,
+        Archive = 0x20,
+        LongName = ReadOnly | Hidden | System | VolumeID,
+        LongNameMask =
+            ReadOnly | Hidden | System | VolumeID | Directory | Archive,
+    };
+
+    FileName DIR_Name;
+    uint8_t DIR_Attr;
+    uint8_t DIR_NTRes;
+    uint8_t DIR_CrtTimeTenth;
+    uint16_t DIR_CrtTime;
+    uint16_t DIR_CrtDate;
+    uint16_t DIR_LstAccDate;
+    uint16_t DIR_FstClusHI;
+    uint16_t DIR_WrtTime;
+    uint16_t DIR_WrtDate;
+    uint16_t DIR_FstClusLO;
+    uint32_t DIR_FileSize;
+
+  public:
+    static const std::string attributeTypeToString(Attr attr) {
+        switch (attr) {
+        case Attr::ReadOnly:
+            return "Read Only";
+        case Attr::Hidden:
+            return "Hidden";
+        case Attr::System:
+            return "System";
+        case Attr::VolumeID:
+            return "Volume ID";
+        case Attr::Directory:
+            return "Directory";
+        case Attr::Archive:
+            return "Archive";
+        case Attr::LongName:
+            return "Long Name";
+        default:
+            return "Unknown";
+        }
+    }
+} __attribute__((packed));
+
+struct LongNameDirectory {
+
+    struct UnicodeChar {
+        uint8_t low;
+        uint8_t high;
+    } __attribute__((packed));
+
+    template <size_t N> struct Name {
+        UnicodeChar values[N];
+    } __attribute__((packed));
+
+    template <size_t N>
+    static const std::pair<std::string, bool> getName(const Name<N> &name) {
+        std::string str = "";
+        for (int i = 0; i < N; ++i) {
+            if (name.values[i].low == 0)
+                return {str, true};
+            str += unicodeToAscii(
+                reinterpret_cast<const uint16_t &>(name.values[i]));
+        }
+        return {str, false};
+    }
+
+    uint8_t LDIR_Ord;
+    Name<5> LDIR_Name1;
+    uint8_t LDIR_Attr;
+    uint8_t LDIR_Type;
+    uint8_t LDIR_Chksum;
+    Name<6> LDIR_Name2;
+    uint16_t LDIR_FstClusLO;
+    Name<2> LDIR_Name3;
+
+} __attribute__((packed));
+
+static_assert(sizeof(LongNameDirectory) == 32);
+
+static_assert(sizeof(FATDirectory) == 32);
+
+static_assert(sizeof(FSInfo) == 512);
+
+struct SimpleStruct {
+    std::string name;
+    uint32_t cluster;
+    bool is_dir;
+
+    operator std::string() const { return name; }
+
+    bool operator==(const SimpleStruct &other) const {
+        return name == other.name && cluster == other.cluster &&
+               is_dir == other.is_dir;
+    }
 };
 
 } // namespace cs5250
+
+// define hash for LsStruct
+namespace std {
+template <> struct hash<cs5250::SimpleStruct> {
+    std::size_t operator()(const cs5250::SimpleStruct &k) const {
+        return std::hash<uint32_t>{}(k.cluster);
+    }
+};
+} // namespace std

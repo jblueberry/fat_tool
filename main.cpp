@@ -1,4 +1,6 @@
+#include "fat_manager.h"
 #include <fcntl.h>
+#include <iostream>
 #include <linux/limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,8 +8,6 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include "fat_manager.h"
-#include <iostream>
 
 /*
  * Hexdump the given data.
@@ -33,7 +33,7 @@
 int main(int argc, char *argv[]) {
     setbuf(stdout, NULL);
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s disk.img ck\n", argv[0]);
+        fprintf(stderr, "Usage: %s %s [command]\n", argv[0], argv[1]);
         exit(1);
     }
     const char *diskimg = argv[1];
@@ -48,6 +48,15 @@ int main(int argc, char *argv[]) {
         mgr.ck();
     } else if (command == "ls") {
         mgr.ls();
+    } else if (command == "cp") {
+        if (argc < 5) {
+            fprintf(stderr, "Usage: %s %s %s [srouce] [destination]\n", argv[0],
+                    argv[1], argv[2]);
+            exit(1);
+        }
+        auto src = std::string(argv[3]);
+        auto dst = std::string(argv[4]);
+        mgr.copyFileTo(src, dst);
     } else {
         std::cerr << "Unknown command: " << command << std::endl;
         exit(1);
