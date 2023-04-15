@@ -2,6 +2,7 @@
 
 #include "fat.h"
 #include "fat_map.h"
+#include "fsinfo_manager.h"
 #include <cassert>
 #include <cstdint>
 #include <fcntl.h>
@@ -47,12 +48,21 @@ using OptionalRef = std::optional<std::reference_wrapper<T>>;
 class FATManager {
   private:
     const std::string file_path_;
-    const uint8_t *image_ = nullptr;
+    uint8_t *image_ = nullptr;
     off_t image_size_ = 0;
     uint32_t root_cluster_number_ = 0;
     std::unique_ptr<FATMap> fat_map_;
     std::unordered_map<SimpleStruct, std::vector<SimpleStruct>> dir_map_;
     SimpleStruct root_dir_;
+    std::unique_ptr<FSInfoManager> fs_info_manager_;
+
+    bool IsFreeDirEntry(const FATDirectory *dir) {
+        return dir->DIR_Name.name[0] == 0x00;
+    }
+
+    bool IsDeletedDirEntry(const FATDirectory *dir) {
+        return dir->DIR_Name.name[0] == 0xE5; // deleted
+    }
 
     template <typename F>
     void ForEverySectorOfCluster(uint32_t cluster_number,
@@ -73,7 +83,7 @@ class FATManager {
 
         do {
             ForEverySectorOfCluster(cluster_number, function);
-            cluster_number = fat_map_->lookup(cluster_number);
+            cluster_number = fat_map_->Lookup(cluster_number);
         } while (!IsEndOfFile(cluster_number));
     }
 
@@ -83,8 +93,26 @@ class FATManager {
 
         do {
             function(cluster_number);
-            cluster_number = fat_map_->lookup(cluster_number);
+            cluster_number = fat_map_->Lookup(cluster_number);
         } while (!IsEndOfFile(cluster_number));
+    }
+
+    template <typename Func>
+    void ForEveryDirEntryInDirSector(const uint8_t *data, Func &&func) {
+        auto dirs_per_sector = bytes_per_sector_ / sizeof(FATDirectory);
+        for (decltype(dirs_per_sector) index = 0; index < dirs_per_sector;
+             ++index) {
+            auto dir = reinterpret_cast<const FATDirectory *>(
+                data + index * sizeof(FATDirectory));
+            if (IsFreeDirEntry(dir)) {
+                // std::cout << "find a free entry\n";
+                break;
+            } else if (IsDeletedDirEntry(dir)) {
+                // std::cout << "find a deleted entry\n";
+                continue;
+            } else
+                func(dir);
+        }
     }
 
   protected:
@@ -104,7 +132,8 @@ class FATManager {
     template <StringConvertible T>
     FATManager(T &&file_path) : file_path_(std::forward<T>(file_path)) {
         auto diskimg = file_path.c_str();
-        int fd = open(diskimg, O_RDONLY);
+        // open the disk image as read-write
+        int fd = open(diskimg, O_RDWR);
         if (fd < 0) {
             perror("open");
             exit(1);
@@ -117,10 +146,10 @@ class FATManager {
         this->image_size_ = size;
 
         // mmap in READ-WRITE mode
-        image_ = static_cast<uint8_t *>(
-            mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0));
         // image_ = static_cast<uint8_t *>(
-        //     mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+        //     mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0));
+        image_ =
+            static_cast<uint8_t *>(mmap(NULL, size, O_RDWR, MAP_SHARED, fd, 0));
         if (image_ == (void *)-1) {
             perror("mmap");
             exit(1);
@@ -205,6 +234,16 @@ class FATManager {
     inline bool IsEndOfFile(uint32_t fat_entry_value) const {
         ASSERT(fat_type_ == FATType::FAT32);
         return fat_entry_value >= 0x0FFFFFF8;
+    }
+
+    inline void DecreaseFreeClusterCount(uint32_t number) {
+        this->fs_info_manager_->SetFreeClusterCount(
+            this->fs_info_manager_->GetFreeClusterCount() - number);
+    }
+
+    inline void IncreaseFreeClusterCount(uint32_t number) {
+        this->fs_info_manager_->SetFreeClusterCount(
+            this->fs_info_manager_->GetFreeClusterCount() + number);
     }
 };
 

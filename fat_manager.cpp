@@ -1,4 +1,5 @@
 #include "fat_manager.h"
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <functional>
@@ -8,6 +9,38 @@
 #include <vector>
 
 namespace cs5250 {
+
+template <typename T> bool IsOneOfVector(T &input, const std::vector<T> &args) {
+    for (auto arg : args) {
+
+        if (reinterpret_cast<uint64_t>(input) ==
+            reinterpret_cast<uint64_t>(arg)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::pair<std::string, bool>
+NameOfLongNameEntry(const LongNameDirectory &entry) {
+    std::string ret = "";
+    auto [name1, end1] = LongNameDirectory::GetName(entry.LDIR_Name1);
+    ret = ret + name1;
+    if (end1)
+        return {ret, true};
+
+    auto [name2, end2] = LongNameDirectory::GetName(entry.LDIR_Name2);
+
+    ret = ret + name2;
+    if (end2)
+        return {ret, true};
+
+    auto [name3, end3] = LongNameDirectory::GetName(entry.LDIR_Name3);
+    ret = ret + name3;
+    if (end3)
+        return {ret, true};
+    return {ret, false};
+}
 
 static std::string ShortNameOf(const char name[11]) {
     std::string ret = "";
@@ -80,13 +113,22 @@ void FATManager::InitBPB(const BPB &bpb) {
     this->data_sector_count_ = data_sector_count;
     this->number_of_fats_ = bpb.BPB_NumFATs;
 
-    auto fat_start_address =
-        reinterpret_cast<uint32_t *>(reinterpret_cast<uint64_t>(image_) +
-                                     (bpb.BPB_RsvdSecCnt * bytes_per_sector_));
+    if (fat_type_ != FATType::FAT32) {
+        return;
+    }
 
-    // only use the first FAT
-    this->fat_map_ = std::make_unique<FATMap>(
-        this->sector_count_per_fat_ * bytes_per_sector_ / 4, fat_start_address);
+    // use all the FATs
+    std::vector<uint32_t *> fat_start_addresses;
+    for (auto i = 0; i < bpb.BPB_NumFATs; ++i) {
+        fat_start_addresses.push_back(reinterpret_cast<uint32_t *>(
+            reinterpret_cast<uint64_t>(image_) +
+            (bpb.BPB_RsvdSecCnt * bytes_per_sector_) +
+            (i * fat_size * bytes_per_sector_)));
+    }
+    this->fat_map_ = std::make_unique<FATMap>(this->number_of_fats_,
+                                              this->sector_count_per_fat_ *
+                                                  bytes_per_sector_ / 4,
+                                              std::move(fat_start_addresses));
 
     auto files_under_dir =
         [this](const SimpleStruct &file,
@@ -94,71 +136,31 @@ void FATManager::InitBPB(const BPB &bpb) {
         std::vector<SimpleStruct> ret;
         auto seen_long_name = false;
         std::string long_name = "";
-        std::vector<LongNameDirectory *> long_name_dirs;
+        std::vector<const LongNameDirectory *> long_name_dirs;
 
         auto sector_function = [this, &ret, &seen_long_name, &long_name, &file,
-                                &parent, &long_name_dirs](auto sector_data_address) {
-            auto dirs_per_sector = bytes_per_sector_ / sizeof(FATDirectory);
-            for (decltype(dirs_per_sector) j = 0; j < dirs_per_sector; ++j) {
-                auto dir = reinterpret_cast<const FATDirectory *>(
-                    sector_data_address + j * sizeof(FATDirectory));
-
+                                &parent,
+                                &long_name_dirs](auto sector_data_address) {
+            auto entry_parser = [this, &ret, &seen_long_name, &long_name, &file,
+                                 &parent,
+                                 &long_name_dirs](const FATDirectory *dir) {
                 if (dir->DIR_Attr == ToIntegral(FATDirectory::Attr::LongName)) {
                     if (!seen_long_name) {
                         seen_long_name = true;
                         long_name = "";
                     }
-                    const LongNameDirectory * long_dir =
+                    const LongNameDirectory *long_dir =
                         reinterpret_cast<const LongNameDirectory *>(dir);
 
-                    auto parse_long_name =
-                        [](const LongNameDirectory *long_name_dir)
-                        -> std::pair<std::string, bool> {
-                        std::string ret = "";
-                        auto [name1, end1] = LongNameDirectory::getName(
-                            long_name_dir->LDIR_Name1);
-                        ret = ret + name1;
-                        if (end1)
-                            return {ret, true};
-
-                        auto [name2, end2] = LongNameDirectory::getName(
-                            long_name_dir->LDIR_Name2);
-
-                        ret = ret + name2;
-                        if (end2)
-                            return {ret, true};
-
-                        auto [name3, end3] = LongNameDirectory::getName(
-                            long_name_dir->LDIR_Name3);
-                        ret = ret + name3;
-                        if (end3)
-                            return {ret, true};
-                        return {ret, false};
-                    };
-
-                    auto [name, end] = parse_long_name(long_dir);
+                    auto [name, end] = NameOfLongNameEntry(*long_dir);
                     long_name = name + long_name;
                     long_name_dirs.push_back(long_dir);
                 } else {
-                    auto isFreeDir = [](const FATDirectory *dir) {
-                        return dir->DIR_Name.name[0] == 0x00 || // free
-                               dir->DIR_Name.name[0] == 0xE5;   // deleted
-                    };
-
-                    auto is_free = isFreeDir(dir);
-
-                    if (is_free) {
-                        if (seen_long_name) {
-                            std::cerr << "long name not ended but free "
-                                         "dir found";
-                            std::abort();
-                        } else
-                            break;
-                    }
                     std::string name;
-                    std::vector<LongNameDirectory *> this_long_name_dirs;
+                    std::vector<const LongNameDirectory *> this_long_name_dirs;
                     if (!seen_long_name) {
-                        name = ShortNameOf(dir->DIR_Name.name);
+                        name = ShortNameOf(
+                            reinterpret_cast<const char *>(dir->DIR_Name.name));
                     } else {
                         name = std::move(long_name);
                         seen_long_name = false;
@@ -185,6 +187,7 @@ void FATManager::InitBPB(const BPB &bpb) {
                     }
                 }
             };
+            ForEveryDirEntryInDirSector(sector_data_address, entry_parser);
         };
 
         ForEverySectorOfFile(file, sector_function);
@@ -206,21 +209,25 @@ void FATManager::InitBPB(const BPB &bpb) {
             dir_map_[cur.first] = std::move(sub_lists);
         }
     }
+
+    auto fs_info_sector_number = bpb.fat32.BPB_FSInfo;
+    this->fs_info_manager_ =
+        std::make_unique<FSInfoManager>(reinterpret_cast<uint8_t *>(
+            this->image_ + fs_info_sector_number * bytes_per_sector_));
 }
 
 void FATManager::Ls() {
+    
     ASSERT(fat_type_ == FATType::FAT32);
 
     // recursively print the map
     std::function<void(const SimpleStruct &, std::string prefix)> print_map =
         [&](const SimpleStruct &cur, std::string prefix) {
-            if (dir_map_.find(cur) != dir_map_.end()) {
-                for (auto &sub : dir_map_[cur]) {
+            if (dir_map_.find(cur) != dir_map_.end())
+                for (auto &sub : dir_map_[cur])
                     print_map(sub, prefix + cur.name + "/");
-                }
-            } else {
+            else
                 std::cout << prefix << cur.name << std::endl;
-            }
         };
 
     print_map(root_dir_, "");
@@ -363,6 +370,18 @@ void FATManager::Delete(const std::string &path) {
 
     auto &detailed_file = detailed_file_option.value();
 
+    for (auto &&r_file : detailed_file) {
+        auto &&file = r_file.get();
+
+        if (file.long_name_entries) {
+            auto long_name_entries = file.long_name_entries.value();
+            // std::cout << file.name << " has " << long_name_entries.size()
+            //           << " long name entries" << std::endl;
+        } else {
+            // std::cout << file.name << " doesn't have long name entries"
+            //           << std::endl;
+        }
+    }
     auto file = detailed_file.back().get();
     auto is_dir = file.is_dir;
 
@@ -399,7 +418,6 @@ void FATManager::DeleteSingleDir(const SimpleStruct &dir) {
 }
 
 void FATManager::DeleteSingleFile(const SimpleStruct &file) {
-    // get sector entries
     std::vector<uint32_t> cluster_entries;
     ForEveryClusterOfFile(file, [this, &cluster_entries](uint32_t cluster) {
         cluster_entries.push_back(cluster);
@@ -409,23 +427,47 @@ void FATManager::DeleteSingleFile(const SimpleStruct &file) {
     for (auto it = cluster_entries.begin(); it != cluster_entries.end(); it++) {
         if (it != cluster_entries.end() - 1) {
             auto next = it + 1;
-            ASSERT_EQ(*next, this->fat_map_->lookup(*it));
+            ASSERT_EQ(*next, this->fat_map_->Lookup(*it));
         } else if (it == cluster_entries.end() - 1) {
-            auto entry = this->fat_map_->lookup(*it);
+            auto entry = this->fat_map_->Lookup(*it);
             ASSERT(IsEndOfFile(entry));
         }
     }
 
-    std::cout << "check passed" << std::endl;
-
     for (auto cluster : cluster_entries) {
-        this->fat_map_->setFree(cluster);
+        this->fat_map_->SetFree(cluster);
+        this->IncreaseFreeClusterCount(1);
     }
 }
 
 void FATManager::RemoveEntryInDir(const SimpleStruct &dir,
-                                  const SimpleStruct &entry) {
-    UNIMPLEMENTED();
+                                  const SimpleStruct &file) {
+
+    ForEverySectorOfFile(dir, [this, &file](const uint8_t *sector_address) {
+        ForEveryDirEntryInDirSector(
+            sector_address, [this, &file](const FATDirectory *entry) {
+                if (entry->DIR_Attr ==
+                    ToIntegral(FATDirectory::Attr::LongName)) {
+                    const LongNameDirectory *long_dir =
+                        reinterpret_cast<const LongNameDirectory *>(entry);
+
+                    if (file.long_name_entries &&
+                        IsOneOfVector(long_dir,
+                                      file.long_name_entries.value())) {
+
+                        ASSERT(entry->DIR_Name.name[0] != 0xE5);
+                        memset((void *)(&(entry->DIR_Name.name[0])), 0xE5, 1);
+                        ASSERT(entry->DIR_Name.name[0] == 0xE5);
+                    }
+                } else {
+                    uint32_t cluster =
+                        entry->DIR_FstClusLO | (entry->DIR_FstClusHI << 16);
+                    if (cluster == file.first_cluster) {
+                        memset((void *)(&entry->DIR_Name.name[0]), 0xE5, 1);
+                    }
+                }
+            });
+    });
 }
 
 void FATManager::CopyFileFrom(const std::string &path,

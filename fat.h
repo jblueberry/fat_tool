@@ -6,7 +6,7 @@
 
 namespace cs5250 {
 
-static char unicodeToAscii(uint16_t unicode) {
+static char UnicodeToAscii(uint16_t unicode) {
     if (unicode >= 0x20 && unicode <= 0x7e) {
         return static_cast<char>(unicode);
     }
@@ -81,8 +81,8 @@ struct FSInfo {
 } __attribute__((packed));
 
 struct FileName {
-    char name[8];
-    char ext[3];
+    uint8_t name[8];
+    uint8_t ext[3];
 } __attribute__((packed));
 
 struct FATDirectory {
@@ -113,7 +113,7 @@ struct FATDirectory {
     uint32_t DIR_FileSize;
 
   public:
-    static const std::string attributeTypeToString(Attr attr) {
+    static const std::string AttributeTypeToString(Attr attr) {
         switch (attr) {
         case Attr::ReadOnly:
             return "Read Only";
@@ -147,12 +147,12 @@ struct LongNameDirectory {
     } __attribute__((packed));
 
     template <size_t N>
-    static const std::pair<std::string, bool> getName(const Name<N> &name) {
+    static const std::pair<std::string, bool> GetName(const Name<N> &name) {
         std::string str = "";
-        for (int i = 0; i < N; ++i) {
+        for (size_t i = 0; i < N; ++i) {
             if (name.values[i].low == 0)
                 return {str, true};
-            str += unicodeToAscii(
+            str += UnicodeToAscii(
                 reinterpret_cast<const uint16_t &>(name.values[i]));
         }
         return {str, false};
@@ -179,7 +179,7 @@ struct SimpleStruct {
     std::string name;
     uint32_t first_cluster;
     bool is_dir;
-    std::optional<std::vector<LongNameDirectory *>> long_name_entries;
+    std::optional<std::vector<const LongNameDirectory *>> long_name_entries;
 
     operator std::string() const { return name; }
 

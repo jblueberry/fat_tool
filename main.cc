@@ -12,7 +12,7 @@
 int main(int argc, char *argv[]) {
     setbuf(stdout, NULL);
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s %s [command]\n", argv[0], argv[1]);
+        fprintf(stderr, "Usage: %s [path] [command]\n", argv[0]);
         exit(1);
     }
     const char *diskimg = argv[1];
@@ -42,16 +42,10 @@ int main(int argc, char *argv[]) {
                     argv[2]);
             exit(1);
         }
-
         auto path = std::string(argv[3]);
         mgr.Delete(path);
     } else {
         std::cerr << "Unknown command: " << command << std::endl;
         exit(1);
     }
-
-    /*
-     * Print the contents of the first cluster.
-     */
-    // hexdump(image, sizeof(*hdr));
 }
