@@ -29,13 +29,30 @@ int main(int argc, char *argv[]) {
         mgr.Ls();
     } else if (command == "cp") {
         if (argc < 5) {
-            fprintf(stderr, "Usage: %s %s %s [srouce] [destination]\n", argv[0],
-                    argv[1], argv[2]);
+            fprintf(stderr,
+                    "Usage: %s %s %s local:[path] image:[path] or %s %s %s "
+                    "image:[path] local:[path]\n",
+                    argv[0], argv[1], argv[2], argv[0], argv[1], argv[2]);
             exit(1);
         }
+        // argv[3] or argv[4] should be in the format of "image:/path/to/file"
+        // and "local:/path/to/file" try to read the first 6 characters
         auto src = std::string(argv[3]);
         auto dst = std::string(argv[4]);
-        mgr.CopyFileTo(src, dst);
+
+        if (src.substr(0, 6) == "image:" && dst.substr(0, 6) == "local:") {
+            mgr.CopyFileTo(src.substr(6), dst.substr(6));
+        } else if (src.substr(0, 6) == "local:" &&
+                   dst.substr(0, 6) == "image:") {
+            mgr.CopyFileFrom(src.substr(6), dst.substr(6));
+        } else {
+            fprintf(stderr,
+                    "Usage: %s %s %s local:[path] image:[path] or %s %s %s "
+                    "image:[path] local:[path]\n",
+                    argv[0], argv[1], argv[2], argv[0], argv[1], argv[2]);
+            exit(1);
+        }
+
     } else if (command == "rm") {
         if (argc < 4) {
             fprintf(stderr, "Usage: %s %s %s [path]\n", argv[0], argv[1],

@@ -5,6 +5,9 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
@@ -217,7 +220,7 @@ void FATManager::InitBPB(const BPB &bpb) {
 }
 
 void FATManager::Ls() {
-    
+
     ASSERT(fat_type_ == FATType::FAT32);
 
     // recursively print the map
@@ -369,19 +372,6 @@ void FATManager::Delete(const std::string &path) {
     }
 
     auto &detailed_file = detailed_file_option.value();
-
-    for (auto &&r_file : detailed_file) {
-        auto &&file = r_file.get();
-
-        if (file.long_name_entries) {
-            auto long_name_entries = file.long_name_entries.value();
-            // std::cout << file.name << " has " << long_name_entries.size()
-            //           << " long name entries" << std::endl;
-        } else {
-            // std::cout << file.name << " doesn't have long name entries"
-            //           << std::endl;
-        }
-    }
     auto file = detailed_file.back().get();
     auto is_dir = file.is_dir;
 
@@ -415,24 +405,11 @@ void FATManager::DeleteSingleDir(const SimpleStruct &dir) {
             DeleteSingleFile(file);
         }
     }
+    DeleteSingleFile(dir);
 }
 
 void FATManager::DeleteSingleFile(const SimpleStruct &file) {
-    std::vector<uint32_t> cluster_entries;
-    ForEveryClusterOfFile(file, [this, &cluster_entries](uint32_t cluster) {
-        cluster_entries.push_back(cluster);
-    });
-
-    // check
-    for (auto it = cluster_entries.begin(); it != cluster_entries.end(); it++) {
-        if (it != cluster_entries.end() - 1) {
-            auto next = it + 1;
-            ASSERT_EQ(*next, this->fat_map_->Lookup(*it));
-        } else if (it == cluster_entries.end() - 1) {
-            auto entry = this->fat_map_->Lookup(*it);
-            ASSERT(IsEndOfFile(entry));
-        }
-    }
+    auto cluster_entries = ClustersOfFile(file);
 
     for (auto cluster : cluster_entries) {
         this->fat_map_->SetFree(cluster);
@@ -472,10 +449,61 @@ void FATManager::RemoveEntryInDir(const SimpleStruct &dir,
 
 void FATManager::CopyFileFrom(const std::string &path,
                               const std::string &dest) {
-    auto file = FindFile(path);
-    if (!file) {
-        std::cerr << "file " << path << " not found" << std::endl;
+
+    auto file = FindFile(dest);
+    if (file) {
+        std::cerr << "file " << dest << " already exists" << std::endl;
         std::exit(1);
+    } else {
+        // open path for reading
+        auto c_file_fd = open(path.c_str(), O_RDONLY);
+        if (c_file_fd == -1) {
+            std::cerr << "failed to open file " << path << std::endl;
+            std::exit(1);
+        }
+
+        // get the size of the file
+        struct stat file_stat;
+        if (fstat(c_file_fd, &file_stat) == -1) {
+            std::cerr << "failed to get file stat" << std::endl;
+            close(c_file_fd);
+            std::exit(1);
+        }
+        auto size = file_stat.st_size;
+
+        // calculate the number of clusters needed
+        uint32_t sector_count_per_cluster = sectors_per_cluster_;
+        uint32_t bytes_per_cluster =
+            bytes_per_sector_ * sector_count_per_cluster;
+        uint32_t cluster_count_needed =
+            (size + bytes_per_cluster - 1) / bytes_per_cluster;
+
+        // if the file is too large, exit
+
+        if (cluster_count_needed >
+            this->fs_info_manager_->GetFreeClusterCount()) {
+            std::cerr << "file too large" << std::endl;
+            close(c_file_fd);
+            std::exit(1);
+        }
+
+        char buffer[bytes_per_sector_];
+        auto size_read = 0;
+        while (true) {
+            size_t n;
+            if (n = read(c_file_fd, buffer, bytes_per_sector_); n == 0) {
+                break;
+            }
+            size_read += n;
+        }
+
+        
+
+        // get the first cluster
+        auto first_free_cluster = this->fs_info_manager_->GetNextFreeCluster();
+
+        // close the file
+        close(c_file_fd);
     }
 }
 

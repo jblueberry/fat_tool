@@ -245,6 +245,14 @@ class FATManager {
         this->fs_info_manager_->SetFreeClusterCount(
             this->fs_info_manager_->GetFreeClusterCount() + number);
     }
+
+    inline std::vector<uint32_t> ClustersOfFile(const SimpleStruct &file) {
+        std::vector<uint32_t> cluster_entries;
+        ForEveryClusterOfFile(file, [this, &cluster_entries](uint32_t cluster) {
+            cluster_entries.push_back(cluster);
+        });
+        return cluster_entries;
+    }
 };
 
 } // namespace cs5250
