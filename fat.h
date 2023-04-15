@@ -1,6 +1,8 @@
 #pragma once
+#include <optional>
 #include <stdint.h>
 #include <string>
+#include <vector>
 
 namespace cs5250 {
 
@@ -175,13 +177,14 @@ static_assert(sizeof(FSInfo) == 512);
 
 struct SimpleStruct {
     std::string name;
-    uint32_t cluster;
+    uint32_t first_cluster;
     bool is_dir;
+    std::optional<std::vector<LongNameDirectory *>> long_name_entries;
 
     operator std::string() const { return name; }
 
     bool operator==(const SimpleStruct &other) const {
-        return name == other.name && cluster == other.cluster &&
+        return name == other.name && first_cluster == other.first_cluster &&
                is_dir == other.is_dir;
     }
 };
@@ -192,7 +195,7 @@ struct SimpleStruct {
 namespace std {
 template <> struct hash<cs5250::SimpleStruct> {
     std::size_t operator()(const cs5250::SimpleStruct &k) const {
-        return std::hash<uint32_t>{}(k.cluster);
+        return std::hash<uint32_t>{}(k.first_cluster);
     }
 };
 } // namespace std

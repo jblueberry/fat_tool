@@ -9,27 +9,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-/*
- * Hexdump the given data.
- *
- * WARNING: THIS FUNCTION IS ONLY FOR DEBUGGING PURPOSES!
- * This function prints the data using an external command called "hexdump", but
- * your program should not depend on external programs. Before submitting, you
- * must remove this function. If you include this function in your submission,
- * you may face a penalty.
- */
-// void hexdump(const void *data, size_t size) {
-// #warning "You must remove this function before submitting."
-//     FILE *proc;
-
-//     proc = popen("hexdump -C", "w");
-//     if (proc == NULL) {
-//         perror("popen");
-//         exit(1);
-//     }
-//     fwrite(data, 1, size, proc);
-// }
-
 int main(int argc, char *argv[]) {
     setbuf(stdout, NULL);
     if (argc < 3) {
@@ -45,9 +24,9 @@ int main(int argc, char *argv[]) {
     auto command = std::string(argv[2]);
 
     if (command == "ck") {
-        mgr.ck();
+        mgr.Ck();
     } else if (command == "ls") {
-        mgr.ls();
+        mgr.Ls();
     } else if (command == "cp") {
         if (argc < 5) {
             fprintf(stderr, "Usage: %s %s %s [srouce] [destination]\n", argv[0],
@@ -56,7 +35,16 @@ int main(int argc, char *argv[]) {
         }
         auto src = std::string(argv[3]);
         auto dst = std::string(argv[4]);
-        mgr.copyFileTo(src, dst);
+        mgr.CopyFileTo(src, dst);
+    } else if (command == "rm") {
+        if (argc < 4) {
+            fprintf(stderr, "Usage: %s %s %s [path]\n", argv[0], argv[1],
+                    argv[2]);
+            exit(1);
+        }
+
+        auto path = std::string(argv[3]);
+        mgr.Delete(path);
     } else {
         std::cerr << "Unknown command: " << command << std::endl;
         exit(1);
