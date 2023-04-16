@@ -17,7 +17,7 @@ endif()
 set(SOURCE_FILES main.cc)
 set(LIBRARY_FILES fat_manager)
 
-add_library(${LIBRARY_FILES} STATIC fat_manager.cpp)
+add_library(${LIBRARY_FILES} STATIC fat_manager.cc)
 
 add_executable(fat ${SOURCE_FILES})
 
