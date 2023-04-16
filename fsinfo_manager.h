@@ -18,5 +18,9 @@ class FSInfoManager {
     }
 
     uint32_t GetNextFreeCluster() { return fs_info_->FSI_Nxt_Free; }
+
+    void SetNextFreeCluster(uint32_t cluster) {
+        fs_info_->FSI_Nxt_Free = cluster;
+    }
 };
 } // namespace cs5250

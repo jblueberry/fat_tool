@@ -237,7 +237,7 @@ void FATManager::Ls() {
 }
 
 OptionalRef<SimpleStruct> FATManager::FindFile(const std::string &path) {
-    auto &current_dir = dir_map_[root_dir_];
+    std::vector<cs5250::SimpleStruct> *current_dir = &dir_map_[root_dir_];
 
     // split the path by '/'
     std::vector<std::string> path_list;
@@ -257,7 +257,7 @@ OptionalRef<SimpleStruct> FATManager::FindFile(const std::string &path) {
     }
 
     auto find_dir = [&](std::string name) -> OptionalRef<SimpleStruct> {
-        for (auto &dir : current_dir) {
+        for (auto &dir : *current_dir) {
             if (dir.name == name && dir.is_dir) {
                 return dir;
             }
@@ -266,7 +266,7 @@ OptionalRef<SimpleStruct> FATManager::FindFile(const std::string &path) {
     };
 
     auto find_file = [&](std::string name) -> OptionalRef<SimpleStruct> {
-        for (auto &dir : current_dir) {
+        for (auto &dir : *current_dir) {
             if (dir.name == name && !dir.is_dir) {
                 return dir;
             }
@@ -285,7 +285,61 @@ OptionalRef<SimpleStruct> FATManager::FindFile(const std::string &path) {
         } else {
             auto dir = find_dir(p);
             if (dir) {
-                current_dir = dir_map_[*dir];
+                current_dir = &dir_map_[*dir];
+            } else {
+                return std::nullopt;
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+OptionalRef<SimpleStruct> FATManager::FindParentDir(const std::string &path) {
+
+    auto current_dir = &root_dir_;
+
+    // split the path by '/'
+    std::vector<std::string> path_list;
+    std::string cur = "";
+    for (auto c : path) {
+        if (c == '/') {
+            if (cur != "") {
+                path_list.push_back(cur);
+                cur = "";
+            }
+        } else {
+            cur = cur + c;
+        }
+    }
+    if (cur != "") {
+        path_list.push_back(cur);
+    }
+
+    auto find_dir = [&](std::string name) -> OptionalRef<SimpleStruct> {
+        // std::cout << "find dir for " << name << std::endl;
+        // std::cout << "current dir is " << current_dir.name << " is it root? "
+        //           << (current_dir.first_cluster ==
+        //           this->root_cluster_number_)
+        //           << std::endl;
+        for (auto &dir : dir_map_[*current_dir]) {
+            if (dir.name == name && dir.is_dir) {
+                return dir;
+            }
+        }
+        return std::nullopt;
+    };
+
+    for (auto &p : path_list) {
+        // std::cout << "now current dir is " << current_dir.name << std::endl;
+        if (p == path_list.back()) {
+            return *current_dir;
+        } else {
+            auto dir = find_dir(p);
+            if (dir) {
+                current_dir = &(dir->get());
+                // std::cout << "current dir is now " << current_dir.name
+                //           << std::endl;
             } else {
                 return std::nullopt;
             }
@@ -471,6 +525,37 @@ void FATManager::CopyFileFrom(const std::string &path,
         }
         auto size = file_stat.st_size;
 
+        // get the parent dir of the file
+        auto parent_dir_op = FindParentDir(dest);
+
+        if (!parent_dir_op) {
+            std::cerr << "parent dir not found" << std::endl;
+            close(c_file_fd);
+            std::exit(1);
+        }
+
+        auto &&parent_dir = parent_dir_op.value().get();
+
+        std::cout << "the parent dir is " << parent_dir.name << std::endl;
+
+        auto get_file_name = [](const std::string &path) {
+            auto pos = path.find_last_of('/');
+            if (pos == std::string::npos) {
+                return path;
+            } else {
+                return path.substr(pos + 1);
+            }
+        };
+
+        auto file_name = get_file_name(dest);
+
+        if (size == 0) {
+            auto empty_file = SimpleStruct{file_name, 0, false};
+            WriteFileToDir(parent_dir, empty_file, 0);
+            close(c_file_fd);
+            return;
+        }
+
         // calculate the number of clusters needed
         uint32_t sector_count_per_cluster = sectors_per_cluster_;
         uint32_t bytes_per_cluster =
@@ -487,24 +572,120 @@ void FATManager::CopyFileFrom(const std::string &path,
             std::exit(1);
         }
 
-        char buffer[bytes_per_sector_];
-        auto size_read = 0;
-        while (true) {
-            size_t n;
-            if (n = read(c_file_fd, buffer, bytes_per_sector_); n == 0) {
-                break;
-            }
-            size_read += n;
+        std::vector<uint32_t> clusters_claimed;
+        for (auto i = 0; i < cluster_count_needed; i++) {
+            auto next_free_cluster =
+                this->fs_info_manager_->GetNextFreeCluster();
+            this->fs_info_manager_->SetNextFreeCluster(
+                this->fat_map_->FindFree());
+            clusters_claimed.push_back(next_free_cluster);
         }
 
-        
+        this->fs_info_manager_->SetFreeClusterCount(
+            this->fs_info_manager_->GetFreeClusterCount() -
+            cluster_count_needed);
 
-        // get the first cluster
-        auto first_free_cluster = this->fs_info_manager_->GetNextFreeCluster();
+        // set the chain of clusters
+        for (auto i = 0; i < cluster_count_needed - 1; i++) {
+            this->fat_map_->Set(clusters_claimed[i], clusters_claimed[i + 1]);
+        }
+        this->fat_map_->Set(clusters_claimed[cluster_count_needed - 1],
+                            0x0FFFFFFF);
+
+        char buffer[bytes_per_sector_];
+        auto size_read_totally = 0;
+
+        // clean the cluster allocated, all 0
+        for (auto i = 0; i < cluster_count_needed; i++) {
+            auto first_sector =
+                FirstSectorNumberOfDataCluster(clusters_claimed[i]);
+            for (auto j = 0; j < sector_count_per_cluster; j++) {
+                auto data = StartAddressOfSector(first_sector + j);
+                memset((void *)data, 0, bytes_per_sector_);
+            }
+        }
+
+        // write the file to the cluster allocated
+        for (auto i = 0; i < cluster_count_needed; i++) {
+            // if not the last cluster, write the whole cluster
+            if (i != cluster_count_needed - 1) {
+                auto first_sector =
+                    FirstSectorNumberOfDataCluster(clusters_claimed[i]);
+                for (auto j = 0; j < sector_count_per_cluster; j++) {
+                    auto data = StartAddressOfSector(first_sector + j);
+                    auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
+                    if (size_read == -1) {
+                        std::cerr << "failed to read file" << std::endl;
+                        close(c_file_fd);
+                        std::exit(1);
+                    }
+
+                    ASSERT(size_read == bytes_per_sector_);
+
+                    size_read_totally += size_read;
+                    memmove((void *)data, buffer, bytes_per_sector_);
+                }
+            } else {
+                auto first_sector =
+                    FirstSectorNumberOfDataCluster(clusters_claimed[i]);
+                // if the last cluster, write the remaining bytes
+                for (auto j = 0; j < sector_count_per_cluster; j++) {
+                    auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
+                    if (size_read == -1) {
+                        std::cerr << "failed to read file" << std::endl;
+                        close(c_file_fd);
+                        std::exit(1);
+                    }
+                    if (size_read == 0) {
+                        break;
+                    }
+                    size_read_totally += size_read;
+
+                    auto data = StartAddressOfSector(first_sector + j);
+                    memmove((void *)data, buffer, size_read_totally);
+                }
+            }
+        }
+
+        auto created_file = SimpleStruct{file_name, clusters_claimed[0], false};
+        WriteFileToDir(parent_dir, created_file, size);
 
         // close the file
         close(c_file_fd);
     }
+}
+
+inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
+                                       const SimpleStruct &file,
+                                       uint32_t size) {
+    auto long_name_entries = LongNameEntriesOfName(file.name);
+    {
+        std::string name = "";
+        for (auto &entry : long_name_entries) {
+            auto [name_part, _] = NameOfLongNameEntry(entry);
+            name = name_part + name;
+        }
+        ASSERT_EQ(name, file.name);
+    }
+    auto dir_entry = FATDirectory();
+    memset(&dir_entry.DIR_Name, 0, sizeof(dir_entry.DIR_Name));
+    dir_entry.DIR_NTRes = 0;
+    dir_entry.DIR_Attr = 0;
+
+    dir_entry.DIR_CrtTimeTenth = 0;
+    dir_entry.DIR_CrtTime = 0;
+    dir_entry.DIR_CrtDate = 0;
+
+    dir_entry.DIR_LstAccDate = 0;
+    dir_entry.DIR_FstClusHI = file.first_cluster >> 16;
+    dir_entry.DIR_WrtTime = 0;
+    dir_entry.DIR_WrtDate = 0;
+    dir_entry.DIR_FstClusLO = file.first_cluster & 0xffff;
+    dir_entry.DIR_FileSize = size;
+
+    // write this entries to the dir data block
+    // first, find the first empty entry
+    // auto first_empty_entry = FindFirstEmptyEntry(dir);
 }
 
 } // namespace cs5250

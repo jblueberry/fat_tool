@@ -44,6 +44,14 @@ class FATMap {
         for (auto &cluster_start : cluster_starts_)
             cluster_start[cluster_number] = next_cluster;
     }
+
+    uint32_t FindFree() {
+        for (uint32_t i = 0; i < size_; ++i) {
+            if (Lookup(i) == 0)
+                return i;
+        }
+        return 0;
+    }
 };
 
 } // namespace cs5250

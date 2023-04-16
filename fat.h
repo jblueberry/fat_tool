@@ -80,12 +80,12 @@ struct FSInfo {
     uint32_t FSI_TrailSig;      /* offset 508 */
 } __attribute__((packed));
 
-struct FileName {
-    uint8_t name[8];
-    uint8_t ext[3];
-} __attribute__((packed));
-
 struct FATDirectory {
+
+    struct ShortName {
+        uint8_t name[8];
+        uint8_t ext[3];
+    } __attribute__((packed));
 
     enum class Attr : uint8_t {
         ReadOnly = 0x01,
@@ -99,7 +99,7 @@ struct FATDirectory {
             ReadOnly | Hidden | System | VolumeID | Directory | Archive,
     };
 
-    FileName DIR_Name;
+    ShortName DIR_Name;
     uint8_t DIR_Attr;
     uint8_t DIR_NTRes;
     uint8_t DIR_CrtTimeTenth;
@@ -140,6 +140,11 @@ struct LongNameDirectory {
     struct UnicodeChar {
         uint8_t low;
         uint8_t high;
+
+      public:
+        UnicodeChar() : low(0), high(0) {}
+        UnicodeChar(uint8_t low, uint8_t high) : low(low), high(high) {}
+        UnicodeChar(uint8_t low) : low(low), high(0) {}
     } __attribute__((packed));
 
     template <size_t N> struct Name {

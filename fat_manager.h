@@ -5,6 +5,7 @@
 #include "fsinfo_manager.h"
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <fcntl.h>
 #include <memory>
 #include <optional>
@@ -253,6 +254,124 @@ class FATManager {
         });
         return cluster_entries;
     }
+
+    inline void WriteFileToDir(const SimpleStruct &dir,
+                               const SimpleStruct &file, uint32_t size);
+
+    inline uint8_t CheckSumOfShortName(FATDirectory::ShortName *name) {
+        uint8_t sum = 0;
+
+        auto p_fcb_name = reinterpret_cast<uint8_t *>(name);
+
+        for (auto i = 0; i < 11; ++i) {
+            sum = ((sum & 1) ? 0x80 : 0) + (sum >> 1) + (*p_fcb_name++);
+        }
+
+        return sum;
+    }
+    inline std::vector<LongNameDirectory>
+    LongNameEntriesOfName(const std::string &name) {
+        std::vector<LongNameDirectory> long_name_entries;
+        auto name_length = name.length();
+        auto long_name_entry_count = (name_length + 12) / 13;
+        for (auto i = 0; i < long_name_entry_count; ++i) {
+            LongNameDirectory long_name_entry;
+            long_name_entry.LDIR_Ord = i + 1;
+            long_name_entry.LDIR_Attr = 0x0F;
+            if (i == long_name_entry_count - 1) {
+                long_name_entry.LDIR_Ord |= 0x40;
+            }
+            // create a short name with all 0s
+            FATDirectory::ShortName short_name;
+            memset(&short_name, 0, sizeof(short_name));
+            long_name_entry.LDIR_Chksum = CheckSumOfShortName(&short_name);
+
+            long_name_entry.LDIR_FstClusLO = 0;
+
+            auto start = i * 13;
+            auto end = start + 13;
+            if (end > name_length) {
+                end = name_length;
+            }
+
+            // see how many characters we can copy
+
+            auto char_number = end - start;
+            // if there is 1-5 characters left, we only need to fill in the
+            // LDIR_Name1
+
+            if (char_number <= 5) {
+                for (auto j = 0; j < 5; ++j) {
+                    if (j >= char_number) {
+                        long_name_entry.LDIR_Name1.values[j] =
+                            LongNameDirectory::UnicodeChar(0);
+                    } else {
+                        long_name_entry.LDIR_Name1.values[j] =
+                            LongNameDirectory::UnicodeChar(name[start + j]);
+                    }
+                }
+
+                // set LDIR_Name2 and LDIR_Name3 to 0
+                memset(&long_name_entry.LDIR_Name2, 0,
+                       sizeof(long_name_entry.LDIR_Name2));
+                memset(&long_name_entry.LDIR_Name3, 0,
+                       sizeof(long_name_entry.LDIR_Name3));
+                long_name_entries.push_back(long_name_entry);
+                continue;
+            }
+
+            // if there is 6-11 characters left, we need to fill in the
+            // LDIR_Name1 and LDIR_Name2
+
+            if (char_number <= 11) {
+                for (auto j = 0; j < 5; ++j) {
+                    long_name_entry.LDIR_Name1.values[j] =
+                        LongNameDirectory::UnicodeChar(name[start + j]);
+                }
+                for (auto j = 5; j < 11; ++j) {
+                    if (j >= char_number) {
+                        long_name_entry.LDIR_Name2.values[j - 5] =
+                            LongNameDirectory::UnicodeChar(0);
+                    } else {
+                        long_name_entry.LDIR_Name2.values[j - 5] =
+                            LongNameDirectory::UnicodeChar(name[start + j]);
+                    }
+                }
+
+                memset(&long_name_entry.LDIR_Name3, 0,
+                       sizeof(long_name_entry.LDIR_Name3));
+                long_name_entries.push_back(long_name_entry);
+                continue;
+            }
+
+            // if there is 12-13 characters left, we need to fill in the
+            // LDIR_Name1, LDIR_Name2 and LDIR_Name3
+            for (auto j = 0; j < 5; ++j) {
+                long_name_entry.LDIR_Name1.values[j] =
+                    LongNameDirectory::UnicodeChar(name[start + j]);
+            }
+            for (auto j = 5; j < 11; ++j) {
+                long_name_entry.LDIR_Name2.values[j - 5] =
+                    LongNameDirectory::UnicodeChar(name[start + j]);
+            }
+            for (auto j = 11; j < 13; ++j) {
+                if (j >= char_number) {
+                    long_name_entry.LDIR_Name3.values[j - 11] =
+                        LongNameDirectory::UnicodeChar(0);
+                } else {
+                    long_name_entry.LDIR_Name3.values[j - 11] =
+                        LongNameDirectory::UnicodeChar(name[start + j]);
+                }
+            }
+            long_name_entries.push_back(long_name_entry);
+        }
+
+        // reverse the order of the long name entries
+        std::reverse(long_name_entries.begin(), long_name_entries.end());
+        return long_name_entries;
+    }
+
+    OptionalRef<SimpleStruct> FindParentDir(const std::string &path);
 };
 
 } // namespace cs5250
