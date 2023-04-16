@@ -603,7 +603,8 @@ void FATManager::CopyFileFrom(const std::string &path,
     // clean the cluster allocated, all 0
     for (decltype(cluster_count_needed) i = 0; i < cluster_count_needed; i++) {
         auto first_sector = FirstSectorNumberOfDataCluster(clusters_claimed[i]);
-        for (decltype(sector_count_per_cluster) j = 0; j < sector_count_per_cluster; j++) {
+        for (decltype(sector_count_per_cluster) j = 0;
+             j < sector_count_per_cluster; j++) {
             auto data = StartAddressOfSector(first_sector + j);
             memset((void *)data, 0, bytes_per_sector_);
         }
@@ -615,7 +616,8 @@ void FATManager::CopyFileFrom(const std::string &path,
         if (i != cluster_count_needed - 1) {
             auto first_sector =
                 FirstSectorNumberOfDataCluster(clusters_claimed[i]);
-            for (decltype(sector_count_per_cluster) j = 0; j < sector_count_per_cluster; j++) {
+            for (decltype(sector_count_per_cluster) j = 0;
+                 j < sector_count_per_cluster; j++) {
                 auto data = StartAddressOfSector(first_sector + j);
                 auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
                 if (size_read == -1) {
@@ -633,7 +635,8 @@ void FATManager::CopyFileFrom(const std::string &path,
             auto first_sector =
                 FirstSectorNumberOfDataCluster(clusters_claimed[i]);
             // if the last cluster, write the remaining bytes
-            for (decltype(sector_count_per_cluster) j = 0; j < sector_count_per_cluster; j++) {
+            for (decltype(sector_count_per_cluster) j = 0;
+                 j < sector_count_per_cluster; j++) {
                 auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
                 if (size_read == -1) {
                     std::cerr << "failed to read file" << std::endl;
@@ -782,8 +785,8 @@ inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
 
             decltype(long_name_entries.size()) entries_written = 0;
 
-            for (decltype(entries_can_be_written_in_current_cluster) i = 0; i < entries_can_be_written_in_current_cluster;
-                 i++) {
+            for (decltype(entries_can_be_written_in_current_cluster) i = 0;
+                 i < entries_can_be_written_in_current_cluster; i++) {
                 if (entries_written == long_name_entries.size())
                     memmove(first_empty_entry_address, &dir_entry,
                             sizeof(FATDirectory));
@@ -813,7 +816,8 @@ inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
                             return;
                         }
                         auto &&new_cluster = new_cluster_op.value();
-                        this->fat_map_->Set<false>(current_cluster, new_cluster[0]);
+                        this->fat_map_->Set<false>(current_cluster,
+                                                   new_cluster[0]);
                         this->fat_map_->Set(new_cluster[0], 0x0FFFFFFF);
                         this->fs_info_manager_->SetFreeClusterCount(
                             this->fs_info_manager_->GetFreeClusterCount() - 1);
@@ -834,7 +838,8 @@ inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
         } else {
             decltype(long_name_entries.size()) entries_written = 0;
 
-            for (decltype(long_name_entries.size()) i = 0; i < long_name_entries.size() + 1; i++) {
+            for (decltype(long_name_entries.size()) i = 0;
+                 i < long_name_entries.size() + 1; i++) {
                 if (entries_written == long_name_entries.size())
                     memmove(first_empty_entry_address, &dir_entry,
                             sizeof(FATDirectory));
@@ -853,6 +858,132 @@ inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
         }
         memmove(first_empty_entry_address, &dir_entry, sizeof(FATDirectory));
     }
+}
+
+inline const std::string FATManager::Info() const {
+    std::string ret;
+    switch (fat_type_) {
+    case FATType::FAT12:
+        ret += "FAT12";
+        break;
+    case FATType::FAT16:
+        ret += "FAT16";
+        break;
+    case FATType::FAT32:
+        ret += "FAT32";
+        break;
+    }
+    ret += " filesystem\n";
+    ret += "BytsPerSec = " + std::to_string(bytes_per_sector_) + "\n";
+    ret += "SecPerClus = " + std::to_string(sectors_per_cluster_) + "\n";
+    ret += "RsvdSecCnt = " + std::to_string(reserved_sector_count_) + "\n";
+    ret += "FATsSecCnt = " + std::to_string(fat_sector_count_) + "\n";
+    ret += "RootSecCnt = " + std::to_string(root_dir_sector_count_) + "\n";
+    ret += "DataSecCnt = " + std::to_string(data_sector_count_);
+    return ret;
+}
+
+inline std::vector<LongNameDirectory>
+FATManager::LongNameEntriesOfName(const std::string &name) {
+    std::vector<LongNameDirectory> long_name_entries;
+
+    auto name_length = name.length();
+    auto long_name_entry_count = (name_length + 12) / 13;
+    for (decltype(long_name_entry_count) i = 0; i < long_name_entry_count;
+         ++i) {
+        LongNameDirectory long_name_entry;
+        long_name_entry.LDIR_Ord = i + 1;
+        long_name_entry.LDIR_Attr = ToIntegral(FATDirectory::Attr::LongName);
+        if (i == long_name_entry_count - 1) {
+            long_name_entry.LDIR_Ord |= 0x40;
+        }
+        // create a short name with all 0s
+        FATDirectory::ShortName short_name;
+        memset(&short_name, 'a', sizeof(short_name));
+        long_name_entry.LDIR_Chksum = CheckSumOfShortName(&short_name);
+
+        long_name_entry.LDIR_FstClusLO = 0;
+        long_name_entry.LDIR_Type = 0;
+
+        auto start = i * 13;
+        auto end = start + 13;
+        if (end > name_length) {
+            end = name_length;
+        }
+
+        // see how many characters we can copy
+
+        auto char_number = end - start;
+
+        if (char_number <= 5) {
+            for (decltype(char_number) j = 0; j < 5; ++j) {
+                if (j >= char_number) {
+                    long_name_entry.LDIR_Name1.values[j] =
+                        LongNameDirectory::UnicodeChar(0);
+                } else {
+                    long_name_entry.LDIR_Name1.values[j] =
+                        LongNameDirectory::UnicodeChar(name[start + j]);
+                }
+            }
+
+            // set LDIR_Name2 and LDIR_Name3 to 0
+            memset(&long_name_entry.LDIR_Name2, 0,
+                   sizeof(long_name_entry.LDIR_Name2));
+            memset(&long_name_entry.LDIR_Name3, 0,
+                   sizeof(long_name_entry.LDIR_Name3));
+            long_name_entries.push_back(long_name_entry);
+            continue;
+        }
+
+        // if there is 6-11 characters left, we need to fill in the
+        // LDIR_Name1 and LDIR_Name2
+
+        if (char_number <= 11) {
+            for (decltype(char_number) j = 0; j < 5; ++j) {
+                long_name_entry.LDIR_Name1.values[j] =
+                    LongNameDirectory::UnicodeChar(name[start + j]);
+            }
+            for (decltype(char_number) j = 5; j < 11; ++j) {
+                if (j >= char_number) {
+                    long_name_entry.LDIR_Name2.values[j - 5] =
+                        LongNameDirectory::UnicodeChar(0);
+                } else {
+                    long_name_entry.LDIR_Name2.values[j - 5] =
+                        LongNameDirectory::UnicodeChar(name[start + j]);
+                }
+            }
+
+            memset(&long_name_entry.LDIR_Name3, 0,
+                   sizeof(long_name_entry.LDIR_Name3));
+            long_name_entries.push_back(long_name_entry);
+            continue;
+        }
+
+        // if there is 12-13 characters left, we need to fill in the
+        // LDIR_Name1, LDIR_Name2 and LDIR_Name3
+        for (decltype(char_number) j = 0; j < 5; ++j) {
+            long_name_entry.LDIR_Name1.values[j] =
+                LongNameDirectory::UnicodeChar(name[start + j]);
+        }
+        for (decltype(char_number) j = 5; j < 11; ++j) {
+            long_name_entry.LDIR_Name2.values[j - 5] =
+                LongNameDirectory::UnicodeChar(name[start + j]);
+        }
+        for (decltype(char_number) j = 11; j < 13; ++j) {
+            if (j >= char_number) {
+                long_name_entry.LDIR_Name3.values[j - 11] =
+                    LongNameDirectory::UnicodeChar(0);
+            } else {
+                long_name_entry.LDIR_Name3.values[j - 11] =
+                    LongNameDirectory::UnicodeChar(name[start + j]);
+            }
+        }
+        long_name_entries.push_back(long_name_entry);
+    }
+
+    // reverse the order of the long name entries
+    std::reverse(long_name_entries.begin(), long_name_entries.end());
+    return long_name_entries;
 }
 
 } // namespace cs5250

@@ -2,11 +2,13 @@
 
 #include "fat.h"
 #include "fat_map.h"
-#include "fsinfo_manager.h"
+#include "fs_info_manager.h"
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,8 +16,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <algorithm>
-#include <functional>
 
 #define ASSERT(x)       assert(x)
 #define ASSERT_EQ(x, y) assert((x) == (y))
@@ -91,14 +91,17 @@ class FATManager {
     }
 
     template <typename F>
-    void ForEverySectorOfFileWithClusterNumber(const SimpleStruct &dir, F &&function) {
+    void ForEverySectorOfFileWithClusterNumber(const SimpleStruct &dir,
+                                               F &&function) {
 
         auto cluster_number = dir.first_cluster;
-        
+
         do {
             // bind the cluster number as the first argument
-            auto function_with_cluster_number = std::bind(function, cluster_number, std::placeholders::_1);
-            ForEverySectorOfCluster(cluster_number, function_with_cluster_number);
+            auto function_with_cluster_number =
+                std::bind(function, cluster_number, std::placeholders::_1);
+            ForEverySectorOfCluster(cluster_number,
+                                    function_with_cluster_number);
             cluster_number = fat_map_->Lookup(cluster_number);
         } while (!IsEndOfFile(cluster_number));
     }
@@ -202,28 +205,7 @@ class FATManager {
 
     void RemoveEntryInDir(const SimpleStruct &dir, const SimpleStruct &file);
 
-    inline const std::string Info() const {
-        std::string ret;
-        switch (fat_type_) {
-        case FATType::FAT12:
-            ret += "FAT12";
-            break;
-        case FATType::FAT16:
-            ret += "FAT16";
-            break;
-        case FATType::FAT32:
-            ret += "FAT32";
-            break;
-        }
-        ret += " filesystem\n";
-        ret += "BytsPerSec = " + std::to_string(bytes_per_sector_) + "\n";
-        ret += "SecPerClus = " + std::to_string(sectors_per_cluster_) + "\n";
-        ret += "RsvdSecCnt = " + std::to_string(reserved_sector_count_) + "\n";
-        ret += "FATsSecCnt = " + std::to_string(fat_sector_count_) + "\n";
-        ret += "RootSecCnt = " + std::to_string(root_dir_sector_count_) + "\n";
-        ret += "DataSecCnt = " + std::to_string(data_sector_count_);
-        return ret;
-    }
+    inline const std::string Info() const;
 
     inline uint8_t *StartAddressOfSector(uint32_t sector_number) const {
         return image_ + (sector_number * bytes_per_sector_);
@@ -232,12 +214,6 @@ class FATManager {
     inline uint32_t SectorNumberOfAddress(uint8_t *address) const {
         return (address - image_) / bytes_per_sector_;
     }
-
-    // inline uint32_t ClusterNumberOfSector(uint32_t sector_number) const {
-    //     return (sector_number - reserved_sector_count_ -
-    //             number_of_fats_ * sector_count_per_fat_) /
-    //            sectors_per_cluster_;
-    // }
 
     inline uint32_t MaximumValidClusterNumber() const {
         return count_of_clusters_ + 1;
@@ -292,109 +268,9 @@ class FATManager {
 
         return sum;
     }
+
     inline std::vector<LongNameDirectory>
-    LongNameEntriesOfName(const std::string &name) {
-        std::vector<LongNameDirectory> long_name_entries;
-        // return long_name_entries;
-        auto name_length = name.length();
-        auto long_name_entry_count = (name_length + 12) / 13;
-        for (decltype(long_name_entry_count) i = 0; i < long_name_entry_count; ++i) {
-            LongNameDirectory long_name_entry;
-            long_name_entry.LDIR_Ord = i + 1;
-            long_name_entry.LDIR_Attr = ToIntegral(FATDirectory::Attr::LongName);
-            if (i == long_name_entry_count - 1) {
-                long_name_entry.LDIR_Ord |= 0x40;
-            }
-            // create a short name with all 0s
-            FATDirectory::ShortName short_name;
-            memset(&short_name, 'a', sizeof(short_name));
-            long_name_entry.LDIR_Chksum = CheckSumOfShortName(&short_name);
-
-            long_name_entry.LDIR_FstClusLO = 0;
-            long_name_entry.LDIR_Type = 0;
-
-            auto start = i * 13;
-            auto end = start + 13;
-            if (end > name_length) {
-                end = name_length;
-            }
-
-            // see how many characters we can copy
-
-            auto char_number = end - start;
-            // if there is 1-5 characters left, we only need to fill in the
-            // LDIR_Name1
-
-            if (char_number <= 5) {
-                for (decltype(char_number) j = 0; j < 5; ++j) {
-                    if (j >= char_number) {
-                        long_name_entry.LDIR_Name1.values[j] =
-                            LongNameDirectory::UnicodeChar(0);
-                    } else {
-                        long_name_entry.LDIR_Name1.values[j] =
-                            LongNameDirectory::UnicodeChar(name[start + j]);
-                    }
-                }
-
-                // set LDIR_Name2 and LDIR_Name3 to 0
-                memset(&long_name_entry.LDIR_Name2, 0,
-                       sizeof(long_name_entry.LDIR_Name2));
-                memset(&long_name_entry.LDIR_Name3, 0,
-                       sizeof(long_name_entry.LDIR_Name3));
-                long_name_entries.push_back(long_name_entry);
-                continue;
-            }
-
-            // if there is 6-11 characters left, we need to fill in the
-            // LDIR_Name1 and LDIR_Name2
-
-            if (char_number <= 11) {
-                for (decltype(char_number) j = 0; j < 5; ++j) {
-                    long_name_entry.LDIR_Name1.values[j] =
-                        LongNameDirectory::UnicodeChar(name[start + j]);
-                }
-                for (decltype(char_number) j = 5; j < 11; ++j) {
-                    if (j >= char_number) {
-                        long_name_entry.LDIR_Name2.values[j - 5] =
-                            LongNameDirectory::UnicodeChar(0);
-                    } else {
-                        long_name_entry.LDIR_Name2.values[j - 5] =
-                            LongNameDirectory::UnicodeChar(name[start + j]);
-                    }
-                }
-
-                memset(&long_name_entry.LDIR_Name3, 0,
-                       sizeof(long_name_entry.LDIR_Name3));
-                long_name_entries.push_back(long_name_entry);
-                continue;
-            }
-
-            // if there is 12-13 characters left, we need to fill in the
-            // LDIR_Name1, LDIR_Name2 and LDIR_Name3
-            for (decltype(char_number) j = 0; j < 5; ++j) {
-                long_name_entry.LDIR_Name1.values[j] =
-                    LongNameDirectory::UnicodeChar(name[start + j]);
-            }
-            for (decltype(char_number) j = 5; j < 11; ++j) {
-                long_name_entry.LDIR_Name2.values[j - 5] =
-                    LongNameDirectory::UnicodeChar(name[start + j]);
-            }
-            for (decltype(char_number) j = 11; j < 13; ++j) {
-                if (j >= char_number) {
-                    long_name_entry.LDIR_Name3.values[j - 11] =
-                        LongNameDirectory::UnicodeChar(0);
-                } else {
-                    long_name_entry.LDIR_Name3.values[j - 11] =
-                        LongNameDirectory::UnicodeChar(name[start + j]);
-                }
-            }
-            long_name_entries.push_back(long_name_entry);
-        }
-
-        // reverse the order of the long name entries
-        std::reverse(long_name_entries.begin(), long_name_entries.end());
-        return long_name_entries;
-    }
+    LongNameEntriesOfName(const std::string &name);
 
     OptionalRef<SimpleStruct> FindParentDir(const std::string &path);
 };
