@@ -37,6 +37,7 @@ class FATMap {
             cluster_start[cluster_number] = 0;
     }
 
+    template <bool free_first = true>
     void Set(uint32_t cluster_number, uint32_t next_cluster) {
         if (cluster_number < 0 || cluster_number >= size_) {
             std::cerr << "cluster number out of range" << std::endl;
@@ -44,9 +45,17 @@ class FATMap {
         }
 
         for (auto &cluster_start : cluster_starts_) {
-            ASSERT(cluster_start[cluster_number] == 0);
+            if constexpr (free_first)
+                ASSERT(cluster_start[cluster_number] == 0);
+            else {
+                ASSERT(IsEndOfFile(cluster_start[cluster_number]));
+            }
             cluster_start[cluster_number] = next_cluster;
         }
+    }
+
+    inline bool IsEndOfFile(uint32_t fat_entry_value) const {
+        return fat_entry_value >= 0x0FFFFFF8;
     }
 
     std::optional<std::vector<uint32_t>> FindFree(uint32_t num) {

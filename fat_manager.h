@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
+#include <functional>
 
 #define ASSERT(x)       assert(x)
 #define ASSERT_EQ(x, y) assert((x) == (y))
@@ -85,6 +86,19 @@ class FATManager {
 
         do {
             ForEverySectorOfCluster(cluster_number, function);
+            cluster_number = fat_map_->Lookup(cluster_number);
+        } while (!IsEndOfFile(cluster_number));
+    }
+
+    template <typename F>
+    void ForEverySectorOfFileWithClusterNumber(const SimpleStruct &dir, F &&function) {
+
+        auto cluster_number = dir.first_cluster;
+        
+        do {
+            // bind the cluster number as the first argument
+            auto function_with_cluster_number = std::bind(function, cluster_number, std::placeholders::_1);
+            ForEverySectorOfCluster(cluster_number, function_with_cluster_number);
             cluster_number = fat_map_->Lookup(cluster_number);
         } while (!IsEndOfFile(cluster_number));
     }
@@ -214,6 +228,16 @@ class FATManager {
     inline uint8_t *StartAddressOfSector(uint32_t sector_number) const {
         return image_ + (sector_number * bytes_per_sector_);
     }
+
+    inline uint32_t SectorNumberOfAddress(uint8_t *address) const {
+        return (address - image_) / bytes_per_sector_;
+    }
+
+    // inline uint32_t ClusterNumberOfSector(uint32_t sector_number) const {
+    //     return (sector_number - reserved_sector_count_ -
+    //             number_of_fats_ * sector_count_per_fat_) /
+    //            sectors_per_cluster_;
+    // }
 
     inline uint32_t MaximumValidClusterNumber() const {
         return count_of_clusters_ + 1;
