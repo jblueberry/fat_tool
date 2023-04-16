@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <algorithm>
 
 #define ASSERT(x)       assert(x)
 #define ASSERT_EQ(x, y) assert((x) == (y))
@@ -106,10 +107,8 @@ class FATManager {
             auto dir = reinterpret_cast<const FATDirectory *>(
                 data + index * sizeof(FATDirectory));
             if (IsFreeDirEntry(dir)) {
-                // std::cout << "find a free entry\n";
                 break;
             } else if (IsDeletedDirEntry(dir)) {
-                // std::cout << "find a deleted entry\n";
                 continue;
             } else
                 func(dir);
@@ -212,7 +211,7 @@ class FATManager {
         return ret;
     }
 
-    inline const uint8_t *StartAddressOfSector(uint32_t sector_number) const {
+    inline uint8_t *StartAddressOfSector(uint32_t sector_number) const {
         return image_ + (sector_number * bytes_per_sector_);
     }
 
@@ -272,21 +271,23 @@ class FATManager {
     inline std::vector<LongNameDirectory>
     LongNameEntriesOfName(const std::string &name) {
         std::vector<LongNameDirectory> long_name_entries;
+        // return long_name_entries;
         auto name_length = name.length();
         auto long_name_entry_count = (name_length + 12) / 13;
-        for (auto i = 0; i < long_name_entry_count; ++i) {
+        for (decltype(long_name_entry_count) i = 0; i < long_name_entry_count; ++i) {
             LongNameDirectory long_name_entry;
             long_name_entry.LDIR_Ord = i + 1;
-            long_name_entry.LDIR_Attr = 0x0F;
+            long_name_entry.LDIR_Attr = ToIntegral(FATDirectory::Attr::LongName);
             if (i == long_name_entry_count - 1) {
                 long_name_entry.LDIR_Ord |= 0x40;
             }
             // create a short name with all 0s
             FATDirectory::ShortName short_name;
-            memset(&short_name, 0, sizeof(short_name));
+            memset(&short_name, 'a', sizeof(short_name));
             long_name_entry.LDIR_Chksum = CheckSumOfShortName(&short_name);
 
             long_name_entry.LDIR_FstClusLO = 0;
+            long_name_entry.LDIR_Type = 0;
 
             auto start = i * 13;
             auto end = start + 13;
@@ -301,7 +302,7 @@ class FATManager {
             // LDIR_Name1
 
             if (char_number <= 5) {
-                for (auto j = 0; j < 5; ++j) {
+                for (decltype(char_number) j = 0; j < 5; ++j) {
                     if (j >= char_number) {
                         long_name_entry.LDIR_Name1.values[j] =
                             LongNameDirectory::UnicodeChar(0);
@@ -324,11 +325,11 @@ class FATManager {
             // LDIR_Name1 and LDIR_Name2
 
             if (char_number <= 11) {
-                for (auto j = 0; j < 5; ++j) {
+                for (decltype(char_number) j = 0; j < 5; ++j) {
                     long_name_entry.LDIR_Name1.values[j] =
                         LongNameDirectory::UnicodeChar(name[start + j]);
                 }
-                for (auto j = 5; j < 11; ++j) {
+                for (decltype(char_number) j = 5; j < 11; ++j) {
                     if (j >= char_number) {
                         long_name_entry.LDIR_Name2.values[j - 5] =
                             LongNameDirectory::UnicodeChar(0);
@@ -346,15 +347,15 @@ class FATManager {
 
             // if there is 12-13 characters left, we need to fill in the
             // LDIR_Name1, LDIR_Name2 and LDIR_Name3
-            for (auto j = 0; j < 5; ++j) {
+            for (decltype(char_number) j = 0; j < 5; ++j) {
                 long_name_entry.LDIR_Name1.values[j] =
                     LongNameDirectory::UnicodeChar(name[start + j]);
             }
-            for (auto j = 5; j < 11; ++j) {
+            for (decltype(char_number) j = 5; j < 11; ++j) {
                 long_name_entry.LDIR_Name2.values[j - 5] =
                     LongNameDirectory::UnicodeChar(name[start + j]);
             }
-            for (auto j = 11; j < 13; ++j) {
+            for (decltype(char_number) j = 11; j < 13; ++j) {
                 if (j >= char_number) {
                     long_name_entry.LDIR_Name3.values[j - 11] =
                         LongNameDirectory::UnicodeChar(0);

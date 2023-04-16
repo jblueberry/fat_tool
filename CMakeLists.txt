@@ -14,13 +14,11 @@ if(ENABLE_ASAN)
   add_link_options(-fsanitize=address -fno-omit-frame-pointer)
 endif()
 
-set(SOURCE_FILES main.cc)
-set(LIBRARY_FILES fat_manager)
+set(SOURCE_FILES main.cc fat_manager.cc)
+# set(LIBRARY_FILES fat_manager)
 
-add_library(${LIBRARY_FILES} STATIC fat_manager.cc)
+# add_library(${LIBRARY_FILES} STATIC fat_manager.cc)
 
 add_executable(fat ${SOURCE_FILES})
 
-add_executable(test test.cc)
-
-target_link_libraries(fat ${LIBRARY_FILES})
+# target_link_libraries(fat ${LIBRARY_FILES})

@@ -184,6 +184,7 @@ struct SimpleStruct {
     std::string name;
     uint32_t first_cluster;
     bool is_dir;
+    uint32_t size;
     std::optional<std::vector<const LongNameDirectory *>> long_name_entries;
 
     operator std::string() const { return name; }

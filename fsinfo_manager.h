@@ -14,6 +14,8 @@ class FSInfoManager {
     uint32_t GetFreeClusterCount() { return fs_info_->FSI_Free_Count; }
 
     void SetFreeClusterCount(uint32_t count) {
+        std::cout << "set free cluster count from " << fs_info_->FSI_Free_Count
+                  << " to " << count << std::endl;
         fs_info_->FSI_Free_Count = count;
     }
 

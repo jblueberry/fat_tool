@@ -112,7 +112,7 @@ void FATManager::InitBPB(const BPB &bpb) {
     reserved_sector_count_ = bpb.BPB_RsvdSecCnt;
     fat_sector_count_ = bpb.BPB_NumFATs * fat_size;
     this->root_dir_sector_count_ = root_dir_sector_count;
-    this->root_dir_ = SimpleStruct{"", this->root_cluster_number_, true};
+    this->root_dir_ = SimpleStruct{"", this->root_cluster_number_, true, 0};
     this->data_sector_count_ = data_sector_count;
     this->number_of_fats_ = bpb.BPB_NumFATs;
 
@@ -183,10 +183,12 @@ void FATManager::InitBPB(const BPB &bpb) {
                         cluster == parent.first_cluster || cluster == 0) {
                     } else {
                         if (this_long_name_dirs.size() > 0)
-                            ret.push_back(
-                                {name, cluster, is_dir, this_long_name_dirs});
+                            ret.push_back({name, cluster, is_dir,
+                                           dir->DIR_FileSize,
+                                           std::move(this_long_name_dirs)});
                         else
-                            ret.push_back({name, cluster, is_dir});
+                            ret.push_back(
+                                {name, cluster, is_dir, dir->DIR_FileSize});
                     }
                 }
             };
@@ -317,11 +319,6 @@ OptionalRef<SimpleStruct> FATManager::FindParentDir(const std::string &path) {
     }
 
     auto find_dir = [&](std::string name) -> OptionalRef<SimpleStruct> {
-        // std::cout << "find dir for " << name << std::endl;
-        // std::cout << "current dir is " << current_dir.name << " is it root? "
-        //           << (current_dir.first_cluster ==
-        //           this->root_cluster_number_)
-        //           << std::endl;
         for (auto &dir : dir_map_[*current_dir]) {
             if (dir.name == name && dir.is_dir) {
                 return dir;
@@ -331,15 +328,12 @@ OptionalRef<SimpleStruct> FATManager::FindParentDir(const std::string &path) {
     };
 
     for (auto &p : path_list) {
-        // std::cout << "now current dir is " << current_dir.name << std::endl;
         if (p == path_list.back()) {
             return *current_dir;
         } else {
             auto dir = find_dir(p);
             if (dir) {
                 current_dir = &(dir->get());
-                // std::cout << "current dir is now " << current_dir.name
-                //           << std::endl;
             } else {
                 return std::nullopt;
             }
@@ -398,8 +392,8 @@ FATManager::FindFileWithDirs(const std::string &path) {
 }
 
 void FATManager::CopyFileTo(const std::string &path, const std::string &dest) {
-    auto file = FindFile(path);
-    if (!file) {
+    auto file_op = FindFile(path);
+    if (!file_op) {
         std::cerr << "file " << path << " not found" << std::endl;
         std::exit(1);
     }
@@ -411,11 +405,21 @@ void FATManager::CopyFileTo(const std::string &path, const std::string &dest) {
         std::exit(1);
     }
 
-    ForEverySectorOfFile(file->get(), [this, &file_ptr](const uint8_t *data) {
-        // write the data to the file
-        file_ptr->write(reinterpret_cast<const char *>(data),
-                        bytes_per_sector_);
-    });
+    auto &&file = file_op.value().get();
+    auto left_size = file.size;
+
+    ForEverySectorOfFile(
+        file, [this, &file_ptr, &left_size](const uint8_t *data) {
+            if (left_size == 0) {
+                return;
+            }
+            // write the data to the file
+            auto copy_size = left_size < this->bytes_per_sector_
+                                 ? left_size
+                                 : this->bytes_per_sector_;
+            file_ptr->write(reinterpret_cast<const char *>(data), copy_size);
+            left_size -= copy_size;
+        });
 }
 
 void FATManager::Delete(const std::string &path) {
@@ -506,158 +510,156 @@ void FATManager::CopyFileFrom(const std::string &path,
 
     auto file = FindFile(dest);
     if (file) {
-        std::cerr << "file " << dest << " already exists" << std::endl;
+        Delete(dest);
+    }
+    // open path for reading
+    auto c_file_fd = open(path.c_str(), O_RDONLY);
+    if (c_file_fd == -1) {
+        std::cerr << "failed to open file " << path << std::endl;
         std::exit(1);
-    } else {
-        // open path for reading
-        auto c_file_fd = open(path.c_str(), O_RDONLY);
-        if (c_file_fd == -1) {
-            std::cerr << "failed to open file " << path << std::endl;
-            std::exit(1);
+    }
+
+    // get the size of the file
+    struct stat file_stat;
+    if (fstat(c_file_fd, &file_stat) == -1) {
+        std::cerr << "failed to get file stat" << std::endl;
+        close(c_file_fd);
+        std::exit(1);
+    }
+    auto size = file_stat.st_size;
+
+    // get the parent dir of the file
+    auto parent_dir_op = FindParentDir(dest);
+
+    if (!parent_dir_op) {
+        std::cerr << "parent dir not found" << std::endl;
+        close(c_file_fd);
+        std::exit(1);
+    }
+
+    auto &&parent_dir = parent_dir_op.value().get();
+
+    auto get_file_name = [](const std::string &path) {
+        auto pos = path.find_last_of('/');
+        if (pos == std::string::npos) {
+            return path;
+        } else {
+            return path.substr(pos + 1);
         }
+    };
 
-        // get the size of the file
-        struct stat file_stat;
-        if (fstat(c_file_fd, &file_stat) == -1) {
-            std::cerr << "failed to get file stat" << std::endl;
-            close(c_file_fd);
-            std::exit(1);
+    auto file_name = get_file_name(dest);
+
+    if (size == 0) {
+        auto empty_file = SimpleStruct{file_name, 0, false};
+        WriteFileToDir(parent_dir, empty_file, 0);
+        close(c_file_fd);
+        return;
+    }
+
+    // calculate the number of clusters needed
+    uint32_t sector_count_per_cluster = sectors_per_cluster_;
+    uint32_t bytes_per_cluster = bytes_per_sector_ * sector_count_per_cluster;
+    uint32_t cluster_count_needed =
+        (size + bytes_per_cluster - 1) / bytes_per_cluster;
+
+    // if the file is too large, exit
+
+    if (cluster_count_needed > this->fs_info_manager_->GetFreeClusterCount()) {
+        std::cerr << "file too large" << std::endl;
+        close(c_file_fd);
+        std::exit(1);
+    }
+
+    auto clusters_claimed_op = this->fat_map_->FindFree(cluster_count_needed);
+
+    if (!clusters_claimed_op) {
+        std::cerr << "failed to find free clusters" << std::endl;
+        close(c_file_fd);
+        std::exit(1);
+    }
+
+    auto &&clusters_claimed = clusters_claimed_op.value();
+
+    this->fs_info_manager_->SetFreeClusterCount(
+        this->fs_info_manager_->GetFreeClusterCount() - cluster_count_needed);
+
+    this->fs_info_manager_->SetNextFreeCluster(
+        this->fat_map_->FindFree(1).value()[0]);
+
+    // set the chain of clusters
+    for (size_t i = 0; i < clusters_claimed.size() - 1; i++) {
+        this->fat_map_->Set(clusters_claimed[i], clusters_claimed[i + 1]);
+    }
+    this->fat_map_->Set(clusters_claimed[cluster_count_needed - 1], 0x0FFFFFFF);
+
+    char buffer[bytes_per_sector_];
+    auto size_read_totally = 0;
+
+    // clean the cluster allocated, all 0
+    for (auto i = 0; i < cluster_count_needed; i++) {
+        auto first_sector = FirstSectorNumberOfDataCluster(clusters_claimed[i]);
+        for (auto j = 0; j < sector_count_per_cluster; j++) {
+            auto data = StartAddressOfSector(first_sector + j);
+            memset((void *)data, 0, bytes_per_sector_);
         }
-        auto size = file_stat.st_size;
+    }
 
-        // get the parent dir of the file
-        auto parent_dir_op = FindParentDir(dest);
-
-        if (!parent_dir_op) {
-            std::cerr << "parent dir not found" << std::endl;
-            close(c_file_fd);
-            std::exit(1);
-        }
-
-        auto &&parent_dir = parent_dir_op.value().get();
-
-        std::cout << "the parent dir is " << parent_dir.name << std::endl;
-
-        auto get_file_name = [](const std::string &path) {
-            auto pos = path.find_last_of('/');
-            if (pos == std::string::npos) {
-                return path;
-            } else {
-                return path.substr(pos + 1);
-            }
-        };
-
-        auto file_name = get_file_name(dest);
-
-        if (size == 0) {
-            auto empty_file = SimpleStruct{file_name, 0, false};
-            WriteFileToDir(parent_dir, empty_file, 0);
-            close(c_file_fd);
-            return;
-        }
-
-        // calculate the number of clusters needed
-        uint32_t sector_count_per_cluster = sectors_per_cluster_;
-        uint32_t bytes_per_cluster =
-            bytes_per_sector_ * sector_count_per_cluster;
-        uint32_t cluster_count_needed =
-            (size + bytes_per_cluster - 1) / bytes_per_cluster;
-
-        // if the file is too large, exit
-
-        if (cluster_count_needed >
-            this->fs_info_manager_->GetFreeClusterCount()) {
-            std::cerr << "file too large" << std::endl;
-            close(c_file_fd);
-            std::exit(1);
-        }
-
-        std::vector<uint32_t> clusters_claimed;
-        for (auto i = 0; i < cluster_count_needed; i++) {
-            auto next_free_cluster =
-                this->fs_info_manager_->GetNextFreeCluster();
-            this->fs_info_manager_->SetNextFreeCluster(
-                this->fat_map_->FindFree());
-            clusters_claimed.push_back(next_free_cluster);
-        }
-
-        this->fs_info_manager_->SetFreeClusterCount(
-            this->fs_info_manager_->GetFreeClusterCount() -
-            cluster_count_needed);
-
-        // set the chain of clusters
-        for (auto i = 0; i < cluster_count_needed - 1; i++) {
-            this->fat_map_->Set(clusters_claimed[i], clusters_claimed[i + 1]);
-        }
-        this->fat_map_->Set(clusters_claimed[cluster_count_needed - 1],
-                            0x0FFFFFFF);
-
-        char buffer[bytes_per_sector_];
-        auto size_read_totally = 0;
-
-        // clean the cluster allocated, all 0
-        for (auto i = 0; i < cluster_count_needed; i++) {
+    // write the file to the cluster allocated
+    for (auto i = 0; i < cluster_count_needed; i++) {
+        // if not the last cluster, write the whole cluster
+        if (i != cluster_count_needed - 1) {
             auto first_sector =
                 FirstSectorNumberOfDataCluster(clusters_claimed[i]);
             for (auto j = 0; j < sector_count_per_cluster; j++) {
                 auto data = StartAddressOfSector(first_sector + j);
-                memset((void *)data, 0, bytes_per_sector_);
+                auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
+                if (size_read == -1) {
+                    std::cerr << "failed to read file" << std::endl;
+                    close(c_file_fd);
+                    std::exit(1);
+                }
+
+                ASSERT(size_read == bytes_per_sector_);
+
+                size_read_totally += size_read;
+                memmove((void *)data, buffer, bytes_per_sector_);
+            }
+        } else {
+            auto first_sector =
+                FirstSectorNumberOfDataCluster(clusters_claimed[i]);
+            // if the last cluster, write the remaining bytes
+            for (auto j = 0; j < sector_count_per_cluster; j++) {
+                auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
+                if (size_read == -1) {
+                    std::cerr << "failed to read file" << std::endl;
+                    close(c_file_fd);
+                    std::exit(1);
+                }
+                if (size_read == 0) {
+                    break;
+                }
+                size_read_totally += size_read;
+
+                auto data = StartAddressOfSector(first_sector + j);
+                memmove((void *)data, buffer, size_read);
             }
         }
-
-        // write the file to the cluster allocated
-        for (auto i = 0; i < cluster_count_needed; i++) {
-            // if not the last cluster, write the whole cluster
-            if (i != cluster_count_needed - 1) {
-                auto first_sector =
-                    FirstSectorNumberOfDataCluster(clusters_claimed[i]);
-                for (auto j = 0; j < sector_count_per_cluster; j++) {
-                    auto data = StartAddressOfSector(first_sector + j);
-                    auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
-                    if (size_read == -1) {
-                        std::cerr << "failed to read file" << std::endl;
-                        close(c_file_fd);
-                        std::exit(1);
-                    }
-
-                    ASSERT(size_read == bytes_per_sector_);
-
-                    size_read_totally += size_read;
-                    memmove((void *)data, buffer, bytes_per_sector_);
-                }
-            } else {
-                auto first_sector =
-                    FirstSectorNumberOfDataCluster(clusters_claimed[i]);
-                // if the last cluster, write the remaining bytes
-                for (auto j = 0; j < sector_count_per_cluster; j++) {
-                    auto size_read = read(c_file_fd, buffer, bytes_per_sector_);
-                    if (size_read == -1) {
-                        std::cerr << "failed to read file" << std::endl;
-                        close(c_file_fd);
-                        std::exit(1);
-                    }
-                    if (size_read == 0) {
-                        break;
-                    }
-                    size_read_totally += size_read;
-
-                    auto data = StartAddressOfSector(first_sector + j);
-                    memmove((void *)data, buffer, size_read_totally);
-                }
-            }
-        }
-
-        auto created_file = SimpleStruct{file_name, clusters_claimed[0], false};
-        WriteFileToDir(parent_dir, created_file, size);
-
-        // close the file
-        close(c_file_fd);
     }
+
+    ASSERT(size_read_totally == size);
+
+    auto created_file = SimpleStruct{file_name, clusters_claimed[0], false};
+    WriteFileToDir(parent_dir, created_file, size);
+
+    // close the file
+    close(c_file_fd);
 }
 
 inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
                                        const SimpleStruct &file,
                                        uint32_t size) {
+
     auto long_name_entries = LongNameEntriesOfName(file.name);
     {
         std::string name = "";
@@ -668,7 +670,8 @@ inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
         ASSERT_EQ(name, file.name);
     }
     auto dir_entry = FATDirectory();
-    memset(&dir_entry.DIR_Name, 0, sizeof(dir_entry.DIR_Name));
+
+    memset(&dir_entry.DIR_Name, 'a', sizeof(dir_entry.DIR_Name));
     dir_entry.DIR_NTRes = 0;
     dir_entry.DIR_Attr = 0;
 
@@ -685,7 +688,56 @@ inline void FATManager::WriteFileToDir(const SimpleStruct &dir,
 
     // write this entries to the dir data block
     // first, find the first empty entry
-    // auto first_empty_entry = FindFirstEmptyEntry(dir);
+    std::optional<std::pair<uint8_t *, uint8_t *>>
+        first_empty_entry_and_its_sector;
+
+    ForEverySectorOfFile(
+        dir, [this, &first_empty_entry_and_its_sector](uint8_t *data) {
+            auto dir_entry_count_per_sector =
+                this->bytes_per_sector_ / sizeof(FATDirectory);
+
+            if (first_empty_entry_and_its_sector.has_value()) {
+                return;
+            }
+
+            for (decltype(dir_entry_count_per_sector) i = 0;
+                 i < dir_entry_count_per_sector; i++) {
+                auto dir_entry = reinterpret_cast<FATDirectory *>(
+                    data + i * sizeof(FATDirectory));
+
+                if (IsFreeDirEntry(dir_entry)) {
+                    first_empty_entry_and_its_sector = std::make_pair(
+                        data, reinterpret_cast<uint8_t *>(dir_entry));
+                    return;
+                }
+            }
+        });
+
+    ASSERT(first_empty_entry_and_its_sector.has_value());
+    // calculate whether there is enough space to write the long name entries
+
+    auto first_empty_entry_address =
+        first_empty_entry_and_its_sector.value().second;
+    auto first_empty_sector_address =
+        first_empty_entry_and_its_sector.value().first;
+
+    auto bytes_left_in_sector =
+        bytes_per_sector_ -
+        (first_empty_entry_address - first_empty_sector_address);
+    auto entry_count_left_in_sector =
+        bytes_left_in_sector / sizeof(FATDirectory);
+
+    if (entry_count_left_in_sector < long_name_entries.size() + 1) {
+        std::cerr << "not enough space to write the long name entries"
+                  << std::endl;
+        return;
+    } else {
+        for (auto &entry : long_name_entries) {
+            memmove(first_empty_entry_address, &entry, sizeof(FATDirectory));
+            first_empty_entry_address += sizeof(FATDirectory);
+        }
+        memmove(first_empty_entry_address, &dir_entry, sizeof(FATDirectory));
+    }
 }
 
 } // namespace cs5250

@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <iostream>
+
+#define ASSERT(x) assert(x)
 
 namespace cs5250 {
 
@@ -30,8 +33,6 @@ class FATMap {
             return;
         }
 
-        std::cout << "set free " << cluster_number << std::endl;
-
         for (auto &cluster_start : cluster_starts_)
             cluster_start[cluster_number] = 0;
     }
@@ -41,16 +42,23 @@ class FATMap {
             std::cerr << "cluster number out of range" << std::endl;
             return;
         }
-        for (auto &cluster_start : cluster_starts_)
+
+        for (auto &cluster_start : cluster_starts_) {
+            ASSERT(cluster_start[cluster_number] == 0);
             cluster_start[cluster_number] = next_cluster;
+        }
     }
 
-    uint32_t FindFree() {
-        for (uint32_t i = 0; i < size_; ++i) {
-            if (Lookup(i) == 0)
-                return i;
+    std::optional<std::vector<uint32_t>> FindFree(uint32_t num) {
+        std::vector<uint32_t> free_clusters;
+        for (uint32_t i = 0; i < size_; i++) {
+            if (Lookup(i) == 0) {
+                free_clusters.push_back(i);
+                if (free_clusters.size() == num)
+                    return free_clusters;
+            }
         }
-        return 0;
+        return std::nullopt;
     }
 };
 
