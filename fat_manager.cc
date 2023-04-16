@@ -320,6 +320,7 @@ OptionalRef<SimpleStruct> FATManager::FindParentDir(const std::string &path) {
 
     auto find_dir = [&](std::string name) -> OptionalRef<SimpleStruct> {
         for (auto &dir : dir_map_[*current_dir]) {
+            // std::cout << dir.name << std::endl;
             if (dir.name == name && dir.is_dir) {
                 return dir;
             }
@@ -345,7 +346,7 @@ OptionalRef<SimpleStruct> FATManager::FindParentDir(const std::string &path) {
 
 std::optional<std::vector<std::reference_wrapper<SimpleStruct>>>
 FATManager::FindFileWithDirs(const std::string &path) {
-    auto &current_dir = dir_map_[root_dir_];
+    auto current_dir = &dir_map_[root_dir_];
 
     // split the path by '/'
     std::vector<std::string> path_list;
@@ -365,7 +366,7 @@ FATManager::FindFileWithDirs(const std::string &path) {
     }
 
     auto find = [&](std::string name) -> OptionalRef<SimpleStruct> {
-        for (auto &dir : current_dir) {
+        for (auto &dir : *current_dir) {
             if (dir.name == name) {
                 return dir;
             }
@@ -380,7 +381,7 @@ FATManager::FindFileWithDirs(const std::string &path) {
             if (p == path_list.back()) {
                 return ret;
             } else if (file->get().is_dir) {
-                current_dir = dir_map_[*file];
+                current_dir = &(dir_map_[*file]);
             } else {
                 return std::nullopt;
             }
@@ -544,6 +545,7 @@ void FATManager::CopyFileFrom(const std::string &path,
     auto size = file_stat.st_size;
 
     // get the parent dir of the file
+    // std::cout << "dest: " << dest << std::endl;
     auto parent_dir_op = FindParentDir(dest);
 
     if (!parent_dir_op) {

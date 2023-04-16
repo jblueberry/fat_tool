@@ -1,3 +1,3 @@
 #!/bin/bash
 
-./build/fat fat32.img ls
+./build/fat disk.img ls

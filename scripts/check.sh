@@ -1,3 +1,3 @@
 #!/bin/bash
 
-fsck.fat fat32.img
+fsck.fat disk.img
