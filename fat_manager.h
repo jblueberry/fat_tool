@@ -3,6 +3,7 @@
 #include "fat.h"
 #include "fat_map.h"
 #include "fs_info_manager.h"
+#include <unistd.h>
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -248,7 +249,7 @@ class FATManager {
 
     inline std::vector<uint32_t> ClustersOfFile(const SimpleStruct &file) {
         std::vector<uint32_t> cluster_entries;
-        ForEveryClusterOfFile(file, [this, &cluster_entries](uint32_t cluster) {
+        ForEveryClusterOfFile(file, [&cluster_entries](uint32_t cluster) {
             cluster_entries.push_back(cluster);
         });
         return cluster_entries;

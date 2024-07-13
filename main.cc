@@ -1,7 +1,6 @@
 #include "fat_manager.h"
 #include <fcntl.h>
 #include <iostream>
-#include <linux/limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -144,7 +144,7 @@ void FATManager::InitBPB(const BPB &bpb) {
         auto sector_function = [this, &ret, &seen_long_name, &long_name, &file,
                                 &parent,
                                 &long_name_dirs](auto sector_data_address) {
-            auto entry_parser = [this, &ret, &seen_long_name, &long_name, &file,
+            auto entry_parser = [&ret, &seen_long_name, &long_name, &file,
                                  &parent,
                                  &long_name_dirs](const FATDirectory *dir) {
                 if (dir->DIR_Attr == ToIntegral(FATDirectory::Attr::LongName)) {
@@ -481,7 +481,7 @@ void FATManager::RemoveEntryInDir(const SimpleStruct &dir,
 
     ForEverySectorOfFile(dir, [this, &file](const uint8_t *sector_address) {
         ForEveryDirEntryInDirSector(
-            sector_address, [this, &file](const FATDirectory *entry) {
+            sector_address, [&file](const FATDirectory *entry) {
                 if (entry->DIR_Attr ==
                     ToIntegral(FATDirectory::Attr::LongName)) {
                     const LongNameDirectory *long_dir =

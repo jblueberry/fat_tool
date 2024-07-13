@@ -6,7 +6,7 @@
 
 namespace cs5250 {
 
-static char UnicodeToAscii(uint16_t unicode) {
+static inline constexpr char UnicodeToAscii(uint16_t unicode) {
     if (unicode >= 0x20 && unicode <= 0x7e) {
         return static_cast<char>(unicode);
     }
